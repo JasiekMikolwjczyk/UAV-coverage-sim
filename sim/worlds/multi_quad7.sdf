@@ -50,6 +50,31 @@
         </visual>
       </link>
     </model>
+    <model name="ground_vehicle">
+      <static>true</static>
+      <pose>0 0 0.15 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <box>
+              <size>1.0 0.6 0.3</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.1 0.1 0.1 1</ambient>
+            <diffuse>0.2 0.2 0.2 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <box>
+              <size>1.0 0.6 0.3</size>
+            </box>
+          </geometry>
+        </collision>
+      </link>
+    </model>
     <light name="sunUTC" type="directional">
       <pose>0 0 500 0 -0 0</pose>
       <cast_shadows>true</cast_shadows>

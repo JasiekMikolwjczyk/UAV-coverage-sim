@@ -106,3 +106,9 @@ spawn_bg "Pose Bridge #1" \
   "sleep 8; set +u; source /opt/ros/jazzy/setup.bash; source '${ROOT_DIR}/ros2_ws/install/setup.bash'; set -u; python3 '${ROOT_DIR}/tools/gz_pose_to_ros_pose.py' --ros-args -p gz_topic:=/world/multi_quad7/pose/info -p target_entity:=quad7_1 -p out_topic:=/uav_1/pose"
 spawn_bg "Pose Bridge #2" \
   "sleep 8; set +u; source /opt/ros/jazzy/setup.bash; source '${ROOT_DIR}/ros2_ws/install/setup.bash'; set -u; python3 '${ROOT_DIR}/tools/gz_pose_to_ros_pose.py' --ros-args -p gz_topic:=/world/multi_quad7/pose/info -p target_entity:=quad7_2 -p out_topic:=/uav_2/pose"
+
+spawn_bg "Ground Vehicle" \
+  "sleep 8; python3 '${ROOT_DIR}/tools/ground_vehicle_runner.py' --world multi_quad7 --model ground_vehicle --speed 1.0 --loop --waypoints \"0,0,0.15; 10,0,0.15; 10,10,0.15; 0,10,0.15\""
+
+spawn_bg "Ground Vehicle Pose Bridge" \
+  "sleep 8; set +u; source /opt/ros/jazzy/setup.bash; source '${ROOT_DIR}/ros2_ws/install/setup.bash'; set -u; python3 '${ROOT_DIR}/tools/gz_pose_to_ros_pose.py' --ros-args -p gz_topic:=/world/multi_quad7/pose/info -p target_entity:=ground_vehicle -p out_topic:=/ground_vehicle/pose"

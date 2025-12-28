@@ -202,11 +202,43 @@ Multi example:
 ```
 
 ---
-## 10) Notes and tuning
+## 10) Ground vehicle (kinematic)
+
+`sim/worlds/multi_quad7.sdf` includes a simple box model named `ground_vehicle`.
+It is moved kinematically via `tools/ground_vehicle_runner.py` (no dynamics).
+`start_multi.sh` launches it automatically in a loop.
+
+Example (inline):
+```
+python3 ~/uav-coverage-sim/tools/ground_vehicle_runner.py \
+  --world multi_quad7 \
+  --model ground_vehicle \
+  --speed 1.0 \
+  --loop \
+  --waypoints "0,0,0.15; 10,0,0.15; 10,10,0.15; 0,10,0.15"
+```
+
+Example (file):
+```
+python3 ~/uav-coverage-sim/tools/ground_vehicle_runner.py \
+  --world multi_quad7 \
+  --model ground_vehicle \
+  --speed 1.0 \
+  --loop \
+  --waypoints-file ~/ground_vehicle.txt
+```
+
+To change the default ground vehicle path used by `start_multi.sh`, edit the
+`--waypoints "...;"` string inside `start_multi.sh` or replace it with
+`--waypoints-file /path/to/file.txt`.
+
+---
+## 11) Notes and tuning
 
 - Pose topics:
   - single: `/uav/pose`
   - multi: `/uav_0/pose`, `/uav_1/pose`, `/uav_2/pose`
+  - ground vehicle: `/ground_vehicle/pose`
 - Coverage grid resolution: `ros2_ws/src/coverage_mapper/coverage_mapper/coverage_core.py` (`res`).
 - MAVProxy is required for stable PX4 behavior.
 
@@ -217,7 +249,7 @@ Speed:
 - `--speed` is m/s and is enforced by velocity setpoints.
 
 ---
-## 11) Troubleshooting
+## 12) Troubleshooting
 
 PX4 build errors (Python deps):
 - `kconfiglib`, `jinja2`, `empy==3.3.4`, `pyyaml`, `pyros-genmsg`
