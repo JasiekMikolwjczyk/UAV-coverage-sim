@@ -109,9 +109,14 @@ def main():
     last_yaw = 0.0
 
     while True:
-        for idx in range(len(points) - 1):
+        if args.loop and len(points) > 1:
+            indices = range(len(points))
+        else:
+            indices = range(len(points) - 1)
+        for idx in indices:
+            nxt = (idx + 1) % len(points)
             x0, y0, z0 = points[idx]
-            x1, y1, z1 = points[idx + 1]
+            x1, y1, z1 = points[nxt]
             dx = x1 - x0
             dy = y1 - y0
             dz = z1 - z0
@@ -131,8 +136,9 @@ def main():
         if not args.loop:
             break
 
-    xf, yf, zf = points[-1]
-    set_pose(args.world, args.model, xf, yf, zf, last_yaw, env, args.verbose)
+    if not args.loop:
+        xf, yf, zf = points[-1]
+        set_pose(args.world, args.model, xf, yf, zf, last_yaw, env, args.verbose)
 
 
 if __name__ == "__main__":

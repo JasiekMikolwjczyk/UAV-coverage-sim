@@ -16,6 +16,7 @@ if ! command -v gnome-terminal >/dev/null 2>&1; then
 fi
 
 pkill -9 -f gz_pose_to_ros_pose.py || true
+pkill -9 -f ground_vehicle_runner.py || true
 pkill -9 -f "gz sim" || true
 pkill -9 -f px4 || true
 pkill -9 -f mavproxy.py || true
@@ -26,17 +27,16 @@ for port in 14540 14541 14542; do
   done
 done
 
-export GZ_SIM_RESOURCE_PATH="${ROOT_DIR}/sim/models:${ROOT_DIR}/sim/worlds:${PX4_GZ_MODELS}:${PX4_GZ_WORLDS}:${GZ_SIM_RESOURCE_PATH:-}"
-export GZ_CONFIG_PATH="/usr/share/gz"
-export PX4_GZ_WORLDS="${ROOT_DIR}/sim/worlds"
-export PX4_GZ_WORLD="multi_quad7"
-
 if [ -f "${GZ_ENV_SH}" ]; then
   set +u
   source "${GZ_ENV_SH}"
   set -u
 fi
 
+export GZ_SIM_RESOURCE_PATH="${ROOT_DIR}/sim/models:${ROOT_DIR}/sim/worlds:${PX4_GZ_MODELS}:${PX4_GZ_WORLDS}:${GZ_SIM_RESOURCE_PATH:-}"
+export GZ_CONFIG_PATH="/usr/share/gz"
+export PX4_GZ_WORLDS="${ROOT_DIR}/sim/worlds"
+export PX4_GZ_WORLD="multi_quad7"
 export GZ_SIM_SYSTEM_PLUGIN_PATH="/usr/lib/x86_64-linux-gnu/gz-sim-8/plugins:${PX4_GZ_PLUGINS}:${GZ_SIM_SYSTEM_PLUGIN_PATH:-}"
 export GZ_SIM_SERVER_CONFIG_PATH="${PX4_GZ_SERVER_CONFIG}"
 
