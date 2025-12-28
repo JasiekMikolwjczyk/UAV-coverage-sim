@@ -12,3 +12,6 @@ __pycache__/
 *.log
 *.tlog
 *.ulg
+
+ros2_ws/*.parm
+ros2_ws/*.tlog*
