@@ -17,11 +17,16 @@ def main():
     parser.add_argument("--title", default="Multi-UAV coverage score")
     parser.add_argument("--out", default="")
     parser.add_argument("--no-show", action="store_true")
+    parser.add_argument("--x-min", type=float, default=-200.0)
+    parser.add_argument("--y-min", type=float, default=-200.0)
+    parser.add_argument("--res", type=float, default=0.1)
     args = parser.parse_args()
 
     cov = np.load(args.path)
 
     nonzero = np.argwhere(cov > 0.0)
+    r0, c0 = 0, 0
+    r1, c1 = cov.shape[0] - 1, cov.shape[1] - 1
     if nonzero.size:
         margin = 2
         r0, c0 = nonzero.min(axis=0)
@@ -33,11 +38,15 @@ def main():
         cov = cov[r0 : r1 + 1, c0 : c1 + 1]
 
     plt.figure()
-    plt.imshow(cov, origin="lower")
+    x0 = args.x_min + c0 * args.res
+    x1 = args.x_min + (c1 + 1) * args.res
+    y0 = args.y_min + r0 * args.res
+    y1 = args.y_min + (r1 + 1) * args.res
+    plt.imshow(cov, origin="lower", extent=[x0, x1, y0, y1], aspect="equal")
     plt.colorbar(label="coverage score")
     plt.title(args.title)
-    plt.xlabel("grid x")
-    plt.ylabel("grid y")
+    plt.xlabel("x [m]")
+    plt.ylabel("y [m]")
     plt.tight_layout()
 
     if args.out:

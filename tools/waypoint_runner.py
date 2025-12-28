@@ -50,6 +50,33 @@ def parse_waypoints(spec: str, default_alt: float):
     return points
 
 
+def parse_waypoints_file(path: str, default_alt: float):
+    points = []
+    with open(path, "r", encoding="utf-8") as handle:
+        for line_no, raw in enumerate(handle, start=1):
+            line = raw.split("#", 1)[0].strip()
+            if not line:
+                continue
+            if ";" in line:
+                try:
+                    points.extend(parse_waypoints(line, default_alt))
+                except ValueError as exc:
+                    raise ValueError(f"{path}:{line_no}: {exc}") from exc
+                continue
+            parts = [p for p in line.replace(",", " ").split() if p]
+            if len(parts) == 2:
+                x, y = float(parts[0]), float(parts[1])
+                z = default_alt
+            elif len(parts) == 3:
+                x, y, z = float(parts[0]), float(parts[1]), float(parts[2])
+            else:
+                raise ValueError(f"{path}:{line_no}: invalid waypoint '{line}'")
+            points.append((x, y, z))
+    if not points:
+        raise ValueError(f"{path}: no waypoints found")
+    return points
+
+
 def wait_heartbeat(master):
     master.wait_heartbeat()
     print("Heartbeat OK")
@@ -156,6 +183,7 @@ def main():
     parser.add_argument("--start-x", type=float, default=0.0)
     parser.add_argument("--start-y", type=float, default=0.0)
     parser.add_argument("--waypoints", type=str, default="")
+    parser.add_argument("--waypoints-file", type=str, default="")
     args = parser.parse_args()
 
     t0 = time.monotonic()
@@ -200,7 +228,17 @@ def main():
     else:
         start_x, start_y = args.start_x, args.start_y
 
-    if args.waypoints:
+    if args.waypoints and args.waypoints_file:
+        raise ValueError("Use only one of --waypoints or --waypoints-file.")
+
+    if args.waypoints_file:
+        points_enu = parse_waypoints_file(args.waypoints_file, default_alt=args.alt)
+        if args.start_current:
+            points_enu = [(x + start_x, y + start_y, z) for (x, y, z) in points_enu]
+            print("Applying current-position offset to waypoints.")
+        print(f"Waypoints file: {args.waypoints_file}")
+        print(f"Waypoints (ENU): {points_enu}")
+    elif args.waypoints:
         points_enu = parse_waypoints(args.waypoints, default_alt=args.alt)
         if args.start_current:
             points_enu = [(x + start_x, y + start_y, z) for (x, y, z) in points_enu]
