@@ -2,12 +2,14 @@
 import os
 import time
 import signal
+import csv
 
 import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from geometry_msgs.msg import PoseStamped
+from sensor_msgs.msg import BatteryState
 
 from coverage_mapper.coverage_core import CoverageParams, CoverageGrid
 
@@ -22,6 +24,8 @@ class CoverageNode(Node):
         self.declare_parameter("out_dir", os.path.expanduser("~/uav-coverage-sim/data/coverage"))
         self.declare_parameter("score_per_tick", 1.0)
         self.declare_parameter("tick_hz", 20.0)
+        self.declare_parameter("battery_topic", "/battery/state")
+        self.declare_parameter("battery_topics", Parameter.Type.STRING_ARRAY)
 
         self.p = CoverageParams(
             x_min=-200.0,
@@ -47,6 +51,13 @@ class CoverageNode(Node):
         self.out_dir = self.get_parameter("out_dir").get_parameter_value().string_value
         self.score_per_tick = float(self.get_parameter("score_per_tick").get_parameter_value().double_value)
         self.tick_hz = float(self.get_parameter("tick_hz").get_parameter_value().double_value)
+        self.battery_topic = self.get_parameter("battery_topic").get_parameter_value().string_value
+        battery_topics_param = self.get_parameter("battery_topics").get_parameter_value()
+        self.battery_topics = list(battery_topics_param.string_array_value)
+        if not self.battery_topics:
+            raw = battery_topics_param.string_value
+            if raw:
+                self.battery_topics = [t.strip() for t in raw.split(",") if t.strip()]
 
         self.t0 = time.time()
         self.last_t = self.t0
@@ -56,6 +67,17 @@ class CoverageNode(Node):
         self.y = 0.0
         self.z = 0.0
         self.multi_poses = {}
+        self.battery_logs = {}
+
+        topics = []
+        if self.battery_topics:
+            topics = self.battery_topics
+        elif self.battery_topic:
+            topics = [self.battery_topic]
+
+        for topic in topics:
+            self.battery_logs[topic] = []
+            self.create_subscription(BatteryState, topic, self._make_battery_cb(topic), 10)
 
         if self.mode == "ros":
             self.sub = self.create_subscription(PoseStamped, self.pose_topic, self.pose_cb, 10)
@@ -110,6 +132,12 @@ class CoverageNode(Node):
             self.multi_poses[topic] = (x, y, z)
         return _cb
 
+    def _make_battery_cb(self, topic: str):
+        def _cb(msg: BatteryState):
+            t = time.time() - self.t0
+            self.battery_logs[topic].append((t, float(msg.voltage), float(msg.percentage)))
+        return _cb
+
     def step(self):
         now = time.time()
         dt = now - self.last_t
@@ -156,6 +184,21 @@ class CoverageNode(Node):
 
         self.get_logger().info(f"Saved: {npy_path}")
         self.get_logger().info(f"Saved: {csv_path}")
+
+        if self.battery_logs:
+            for topic, rows in self.battery_logs.items():
+                if not rows:
+                    continue
+                safe = topic.strip("/").replace("/", "_")
+                filename = f"battery_log_{safe}.csv"
+                if len(self.battery_logs) == 1:
+                    filename = "battery_log.csv"
+                battery_csv = os.path.join(self.out_dir, filename)
+                with open(battery_csv, "w", newline="") as handle:
+                    writer = csv.writer(handle)
+                    writer.writerow(["t_s", "voltage_v", "percentage"])
+                    writer.writerows(rows)
+                self.get_logger().info(f"Saved: {battery_csv}")
 
 
 def main():

@@ -93,6 +93,18 @@ def arm(master):
     )
 
 
+def land(master):
+    master.set_mode("LAND")
+    master.mav.command_long_send(
+        master.target_system,
+        master.target_component,
+        mavutil.mavlink.MAV_CMD_NAV_LAND,
+        0,
+        0,
+        0, 0, 0, 0, 0, 0,
+    )
+
+
 def set_mode_offboard(master):
     master.set_mode("OFFBOARD")
 
@@ -179,6 +191,7 @@ def main():
     parser.add_argument("--rate-hz", type=float, default=10.0)
     parser.add_argument("--auto-arm", action="store_true")
     parser.add_argument("--auto-takeoff", action="store_true")
+    parser.add_argument("--auto-land", action="store_true")
     parser.add_argument("--start-current", action="store_true")
     parser.add_argument("--start-x", type=float, default=0.0)
     parser.add_argument("--start-y", type=float, default=0.0)
@@ -298,6 +311,9 @@ def main():
         time.sleep(0.2)
 
     print("Route complete.")
+    if args.auto_land:
+        print("Landing...")
+        land(master)
 
 
 if __name__ == "__main__":

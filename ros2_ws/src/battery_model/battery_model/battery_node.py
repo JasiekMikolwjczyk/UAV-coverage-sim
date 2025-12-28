@@ -14,9 +14,13 @@ class BatteryNode(Node):
         super().__init__("battery_node")
         self.declare_parameter("log_path", os.path.expanduser("~/uav-coverage-sim/data/logs/battery.csv"))
         self.declare_parameter("rate_hz", 10.0)
+        self.declare_parameter("throttle_topic", "/battery/throttle")
+        self.declare_parameter("state_topic", "/battery/state")
 
         self.log_path = self.get_parameter("log_path").value
         self.rate_hz = float(self.get_parameter("rate_hz").value)
+        self.throttle_topic = self.get_parameter("throttle_topic").value
+        self.state_topic = self.get_parameter("state_topic").value
 
         os.makedirs(os.path.dirname(self.log_path), exist_ok=True)
         self.log_file = open(self.log_path, "w", newline="")
@@ -27,8 +31,8 @@ class BatteryNode(Node):
         self.voltage = 12.6
         self.percentage = 1.0
 
-        self.sub = self.create_subscription(Float32, "/battery/throttle", self.throttle_cb, 10)
-        self.pub = self.create_publisher(BatteryState, "/battery/state", 10)
+        self.sub = self.create_subscription(Float32, self.throttle_topic, self.throttle_cb, 10)
+        self.pub = self.create_publisher(BatteryState, self.state_topic, 10)
         self.timer = self.create_timer(1.0 / self.rate_hz, self.tick)
 
         self.get_logger().info(f"BatteryNode started. Logging to {self.log_path}")

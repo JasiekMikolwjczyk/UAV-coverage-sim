@@ -12,11 +12,13 @@ class ThrottleBridge(Node):
         super().__init__("throttle_bridge")
         self.declare_parameter("udp", "udp:127.0.0.1:14540")
         self.declare_parameter("rate_hz", 10.0)
+        self.declare_parameter("out_topic", "/battery/throttle")
 
         self.udp = self.get_parameter("udp").value
         self.rate_hz = float(self.get_parameter("rate_hz").value)
+        self.out_topic = self.get_parameter("out_topic").value
 
-        self.pub = self.create_publisher(Float32, "/battery/throttle", 10)
+        self.pub = self.create_publisher(Float32, self.out_topic, 10)
 
         self.get_logger().info(f"Connecting MAVLink: {self.udp}")
         self.master = mavutil.mavlink_connection(self.udp)

@@ -17,6 +17,8 @@ fi
 
 pkill -9 -f gz_pose_to_ros_pose.py || true
 pkill -9 -f ground_vehicle_runner.py || true
+pkill -9 -f battery_node || true
+pkill -9 -f throttle_bridge.py || true
 pkill -9 -f "gz sim" || true
 pkill -9 -f px4 || true
 pkill -9 -f mavproxy.py || true
@@ -112,3 +114,17 @@ spawn_bg "Ground Vehicle" \
 
 spawn_bg "Ground Vehicle Pose Bridge" \
   "sleep 8; set +u; source /opt/ros/jazzy/setup.bash; source '${ROOT_DIR}/ros2_ws/install/setup.bash'; set -u; python3 '${ROOT_DIR}/tools/gz_pose_to_ros_pose.py' --ros-args -p gz_topic:=/world/multi_quad7/pose/info -p target_entity:=ground_vehicle -p out_topic:=/ground_vehicle/pose"
+
+spawn_bg "Throttle Bridge #0" \
+  "sleep 8; set +u; source /opt/ros/jazzy/setup.bash; source '${ROOT_DIR}/ros2_ws/install/setup.bash'; set -u; python3 '${ROOT_DIR}/tools/throttle_bridge.py' --ros-args -p udp:=udp:127.0.0.1:14540 -p out_topic:=/uav_0/battery/throttle"
+spawn_bg "Throttle Bridge #1" \
+  "sleep 8; set +u; source /opt/ros/jazzy/setup.bash; source '${ROOT_DIR}/ros2_ws/install/setup.bash'; set -u; python3 '${ROOT_DIR}/tools/throttle_bridge.py' --ros-args -p udp:=udp:127.0.0.1:14541 -p out_topic:=/uav_1/battery/throttle"
+spawn_bg "Throttle Bridge #2" \
+  "sleep 8; set +u; source /opt/ros/jazzy/setup.bash; source '${ROOT_DIR}/ros2_ws/install/setup.bash'; set -u; python3 '${ROOT_DIR}/tools/throttle_bridge.py' --ros-args -p udp:=udp:127.0.0.1:14542 -p out_topic:=/uav_2/battery/throttle"
+
+spawn_bg "Battery Model #0" \
+  "sleep 10; set +u; source /opt/ros/jazzy/setup.bash; source '${ROOT_DIR}/ros2_ws/install/setup.bash'; set -u; ros2 run battery_model battery_node --ros-args -p throttle_topic:=/uav_0/battery/throttle -p state_topic:=/uav_0/battery/state -p log_path:=${ROOT_DIR}/data/logs/battery_uav0.csv"
+spawn_bg "Battery Model #1" \
+  "sleep 10; set +u; source /opt/ros/jazzy/setup.bash; source '${ROOT_DIR}/ros2_ws/install/setup.bash'; set -u; ros2 run battery_model battery_node --ros-args -p throttle_topic:=/uav_1/battery/throttle -p state_topic:=/uav_1/battery/state -p log_path:=${ROOT_DIR}/data/logs/battery_uav1.csv"
+spawn_bg "Battery Model #2" \
+  "sleep 10; set +u; source /opt/ros/jazzy/setup.bash; source '${ROOT_DIR}/ros2_ws/install/setup.bash'; set -u; ros2 run battery_model battery_node --ros-args -p throttle_topic:=/uav_2/battery/throttle -p state_topic:=/uav_2/battery/state -p log_path:=${ROOT_DIR}/data/logs/battery_uav2.csv"

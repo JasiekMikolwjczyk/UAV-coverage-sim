@@ -61,6 +61,7 @@ trap 'INTERRUPTED=1' INT TERM
   ros2 run coverage_mapper coverage_node --ros-args \
     -p mode:=ros_multi \
     -p pose_topics:="['/uav_0/pose','/uav_1/pose','/uav_2/pose']" \
+    -p battery_topics:="['/uav_0/battery/state','/uav_1/battery/state','/uav_2/battery/state']" \
     -p out_dir:="${OUT_DIR}" \
     -p score_per_tick:=1.0 \
     -p tick_hz:=20.0
@@ -79,6 +80,7 @@ run_wp() {
       --udp "${udp}" \
       --auto-arm \
       --auto-takeoff \
+      --auto-land \
       --waypoints-file "${waypoints_file}" \
       "${pass_through[@]}"
   else
@@ -86,6 +88,7 @@ run_wp() {
       --udp "${udp}" \
       --auto-arm \
       --auto-takeoff \
+      --auto-land \
       --waypoints "${waypoints}" \
       "${pass_through[@]}"
   fi
@@ -132,6 +135,20 @@ wait_for_coverage_file() {
   return 1
 }
 
+wait_for_file() {
+  local path="$1"
+  local max_wait=20
+  local waited=0
+  while (( waited < max_wait )); do
+    if [[ -s "${path}" ]]; then
+      return 0
+    fi
+    sleep 0.5
+    waited=$((waited + 1))
+  done
+  return 1
+}
+
 timestamp="$(date +%Y%m%d_%H%M%S)"
 run_dir="${RUNS_DIR}/${timestamp}"
 mkdir -p "${run_dir}"
@@ -162,6 +179,14 @@ fi
 if wait_for_coverage_file "${OUT_DIR}/coverage_score.npy"; then
   cp -f "${OUT_DIR}/coverage_score.npy" "${run_dir}/coverage_score.npy"
   cp -f "${OUT_DIR}/coverage_score.csv" "${run_dir}/coverage_score.csv"
+  if wait_for_file "${OUT_DIR}/battery_log.csv"; then
+    mv -f "${OUT_DIR}/battery_log.csv" "${run_dir}/battery_log.csv"
+  fi
+  for f in "${OUT_DIR}"/battery_log_*.csv; do
+    if wait_for_file "${f}"; then
+      mv -f "${f}" "${run_dir}/"
+    fi
+  done
   python3 "${ROOT_DIR}/tools/plot_coverage_score.py" \
     --path "${run_dir}/coverage_score.npy" \
     --title "Multi-UAV coverage score" \

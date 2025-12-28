@@ -233,12 +233,34 @@ To change the default ground vehicle path used by `start_multi.sh`, edit the
 `--waypoints-file /path/to/file.txt`.
 
 ---
-## 11) Notes and tuning
+## 11) Line-follow formation (UAVs above ground vehicle)
+
+Use `tools/line_follow_runner.py` to keep three UAVs in a line relative to the
+ground vehicle position. Offsets are in ENU meters relative to the vehicle.
+
+Example:
+```
+python3 ~/uav-coverage-sim/tools/line_follow_runner.py \
+  --auto-arm \
+  --auto-takeoff \
+  --alt 10 \
+  --offsets "0,0; 0,5; 0,-5"
+```
+
+This makes:
+- UAV0 at vehicle position
+- UAV1 at +5m in Y
+- UAV2 at -5m in Y
+
+---
+## 12) Notes and tuning
 
 - Pose topics:
   - single: `/uav/pose`
   - multi: `/uav_0/pose`, `/uav_1/pose`, `/uav_2/pose`
   - ground vehicle: `/ground_vehicle/pose`
+- Battery topics:
+  - `/uav_0/battery/state`, `/uav_1/battery/state`, `/uav_2/battery/state`
 - Coverage grid resolution: `ros2_ws/src/coverage_mapper/coverage_mapper/coverage_core.py` (`res`).
 - MAVProxy is required for stable PX4 behavior.
 
@@ -249,7 +271,7 @@ Speed:
 - `--speed` is m/s and is enforced by velocity setpoints.
 
 ---
-## 12) Troubleshooting
+## 13) Troubleshooting
 
 PX4 build errors (Python deps):
 - `kconfiglib`, `jinja2`, `empy==3.3.4`, `pyyaml`, `pyros-genmsg`
