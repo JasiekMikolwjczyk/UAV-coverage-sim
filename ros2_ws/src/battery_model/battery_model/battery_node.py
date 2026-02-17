@@ -37,7 +37,7 @@ class BatteryNode(Node):
         self.throttle = float(msg.data)
 
     def tick(self):
-        # naive drain model
+        # podstawowy model zużycia baterii
         drain = 0.001 * self.throttle
         self.percentage = max(0.0, self.percentage - drain)
         self.voltage = 10.0 + 2.6 * self.percentage
