@@ -29,7 +29,7 @@ sleep 1
 
 (
   source "${ROOT_DIR}/.venv/bin/activate"
-  python3 "${ROOT_DIR}/tools/waypoint_runner.py" --auto-arm --auto-takeoff "$@"
+  python3 "${ROOT_DIR}/tools/waypoint_runner.py" --auto-arm --auto-takeoff --auto-land "$@"
 )
 
 cleanup
