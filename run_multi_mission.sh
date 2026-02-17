@@ -11,10 +11,13 @@ uav2=""
 uav0_file=""
 uav1_file=""
 uav2_file=""
+config=""
 pass_through=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --config)
+      config="${2:-}"; shift 2 ;;
     --uav0)
       uav0="${2:-}"; shift 2 ;;
     --uav1)
@@ -32,9 +35,15 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ -n "${config}" ]]; then
+  python3 "${ROOT_DIR}/tools/run_multi_mission_config.py" --config "${config}"
+  exit $?
+fi
+
 if [[ -z "${uav0}" && -z "${uav0_file}" ]] || [[ -z "${uav1}" && -z "${uav1_file}" ]] || [[ -z "${uav2}" && -z "${uav2_file}" ]]; then
   echo "Usage: $0 --uav0 \"x,y,z;...\" --uav1 \"x,y,z;...\" --uav2 \"x,y,z;...\" [waypoint_runner args]"
   echo "   or: $0 --uav0-file path.txt --uav1-file path.txt --uav2-file path.txt [waypoint_runner args]"
+  echo "   or: $0 --config path.json"
   exit 1
 fi
 

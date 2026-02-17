@@ -34,6 +34,13 @@ cd ~/uav-coverage-sim
   --speed 2
 ```
 
+Multi UAV (config file):
+```
+cd ~/uav-coverage-sim
+./start_multi.sh
+./run_multi_mission.sh --config configs/multi_mission.json
+```
+
 ---
 ## 1) System prerequisites
 

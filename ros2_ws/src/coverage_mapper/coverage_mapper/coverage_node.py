@@ -19,6 +19,7 @@ class CoverageNode(Node):
         self.declare_parameter("mode", "test")
         self.declare_parameter("pose_topic", "/uav/pose")
         self.declare_parameter("pose_topics", Parameter.Type.STRING_ARRAY)
+        self.declare_parameter("pose_topic_scores", Parameter.Type.DOUBLE_ARRAY)
         self.declare_parameter("out_dir", os.path.expanduser("~/uav-coverage-sim/data/coverage"))
         self.declare_parameter("score_per_tick", 1.0)
         self.declare_parameter("tick_hz", 20.0)
@@ -44,6 +45,16 @@ class CoverageNode(Node):
             if raw:
                 self.pose_topics = [t.strip() for t in raw.split(",") if t.strip()]
 
+        score_param = self.get_parameter("pose_topic_scores").get_parameter_value()
+        pose_scores = list(score_param.double_array_value)
+        if not pose_scores:
+            raw = score_param.string_value
+            if raw:
+                try:
+                    pose_scores = [float(s.strip()) for s in raw.split(",") if s.strip()]
+                except ValueError:
+                    pose_scores = []
+
         self.out_dir = self.get_parameter("out_dir").get_parameter_value().string_value
         self.score_per_tick = float(self.get_parameter("score_per_tick").get_parameter_value().double_value)
         self.tick_hz = float(self.get_parameter("tick_hz").get_parameter_value().double_value)
@@ -64,6 +75,16 @@ class CoverageNode(Node):
             if not self.pose_topics:
                 self.pose_topics = [self.pose_topic]
             self.pose_topics = [t.strip() for t in self.pose_topics if t.strip()]
+            self.pose_topic_scores = {}
+            if pose_scores and len(pose_scores) != len(self.pose_topics):
+                self.get_logger().warn(
+                    "pose_topic_scores length does not match pose_topics; using default weights."
+                )
+                pose_scores = []
+            if pose_scores:
+                self.pose_topic_scores = dict(zip(self.pose_topics, pose_scores))
+            else:
+                self.pose_topic_scores = {t: 1.0 for t in self.pose_topics}
             for topic in self.pose_topics:
                 self.multi_poses[topic] = None
                 self.create_subscription(PoseStamped, topic, self._make_pose_cb(topic), 10)
@@ -126,10 +147,11 @@ class CoverageNode(Node):
         elif self.mode == "ros_multi":
             if not self.multi_poses:
                 return
-            score = self.score_per_tick if self.score_per_tick > 0.0 else 1.0
-            for pose in self.multi_poses.values():
+            default_score = self.score_per_tick if self.score_per_tick > 0.0 else 1.0
+            for topic, pose in self.multi_poses.items():
                 if pose is None:
                     continue
+                score = self.pose_topic_scores.get(topic, default_score)
                 x, y, z = pose
                 self.grid.apply(x, y, z, score)
         else:

@@ -31,6 +31,19 @@ export GZ_CONFIG_PATH="/usr/share/gz"
 export PX4_GZ_WORLDS="${ROOT_DIR}/sim/worlds"
 export PX4_GZ_WORLD="multi_quad7"
 
+if [[ -z "${GZ_IP:-}" ]]; then
+  if command -v ip >/dev/null 2>&1; then
+    GZ_IP="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i=="src") {print $(i+1); exit}}')"
+  fi
+  if [[ -z "${GZ_IP:-}" ]] && command -v hostname >/dev/null 2>&1; then
+    GZ_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  fi
+  if [[ -n "${GZ_IP:-}" ]]; then
+    export GZ_IP
+    echo "Using GZ_IP=${GZ_IP}"
+  fi
+fi
+
 if [ -f "${GZ_ENV_SH}" ]; then
   set +u
   source "${GZ_ENV_SH}"
