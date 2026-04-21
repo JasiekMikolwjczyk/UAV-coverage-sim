@@ -22,11 +22,26 @@ class CoverageGrid:
         self.coverage = np.zeros((self.ny, self.nx), dtype=np.float32)
         self.fov_half_rad = np.deg2rad(p.fov_deg * 0.5)
 
-    def apply(self, x: float, y: float, z: float, dt: float):
-        r_fov = max(0.0, z * np.tan(self.fov_half_rad))
+    def apply(self, x: float, y: float, z: float, dt: float,
+              fov_deg: float | None = None,
+              r_max: float | None = None,
+              z_override: float | None = None):
+        z_eff = z_override if z_override is not None else z
+        if z_eff <= 0.0:
+            return
 
-        if self.p.r_max > z:
-            r_geom = np.sqrt(max(0.0, self.p.r_max**2 - z**2))
+        if fov_deg is None:
+            fov_half_rad = self.fov_half_rad
+        else:
+            fov_half_rad = np.deg2rad(fov_deg * 0.5)
+
+        if r_max is None:
+            r_max = self.p.r_max
+
+        r_fov = max(0.0, z_eff * np.tan(fov_half_rad))
+
+        if r_max > z_eff:
+            r_geom = np.sqrt(max(0.0, r_max**2 - z_eff**2))
             r = min(r_fov, r_geom)
         else:
             r = 0.0

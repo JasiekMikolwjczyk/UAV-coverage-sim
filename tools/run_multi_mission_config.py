@@ -13,7 +13,7 @@ def _fmt_ros_list(items):
 
 
 def _fmt_num_list(items):
-    return "[" + ", ".join(f"{v:.6g}" for v in items) + "]"
+    return "[" + ", ".join(f"{v:.6f}" for v in items) + "]"
 
 
 def _require_key(obj, key):
@@ -60,6 +60,9 @@ def main():
 
     pose_topics = []
     pose_scores = []
+    pose_fov = []
+    pose_rmax = []
+    pose_alt = []
     for drone in drones:
         name = drone.get("name", "")
         pose_topic = drone.get("pose_topic")
@@ -68,9 +71,18 @@ def main():
         pose_topic = _require_key({"pose_topic": pose_topic}, "pose_topic")
         pose_topics.append(pose_topic)
         pose_scores.append(float(drone.get("score_per_tick", score_default)))
+        fov = drone.get("fov_deg")
+        rmax = drone.get("r_max")
+        alt = drone.get("coverage_alt")
+        pose_fov.append(float(fov) if fov is not None else float("nan"))
+        pose_rmax.append(float(rmax) if rmax is not None else float("nan"))
+        pose_alt.append(float(alt) if alt is not None else float("nan"))
 
     pose_topics_arg = _fmt_ros_list([f"'{t}'" for t in pose_topics])
     pose_scores_arg = _fmt_num_list(pose_scores)
+    pose_fov_arg = _fmt_num_list(pose_fov)
+    pose_rmax_arg = _fmt_num_list(pose_rmax)
+    pose_alt_arg = _fmt_num_list(pose_alt)
 
     venv_py = os.path.join(root_dir, ".venv", "bin", "python3")
     if not os.path.isfile(venv_py):
@@ -85,9 +97,12 @@ def main():
         "-p mode:=ros_multi "
         f"-p pose_topics:=\"{pose_topics_arg}\" "
         f"-p pose_topic_scores:=\"{pose_scores_arg}\" "
+        f"-p pose_topic_fov_deg:=\"{pose_fov_arg}\" "
+        f"-p pose_topic_r_max:=\"{pose_rmax_arg}\" "
+        f"-p pose_topic_alt:=\"{pose_alt_arg}\" "
         f"-p out_dir:=\"{out_dir}\" "
-        f"-p score_per_tick:={score_default:.6g} "
-        f"-p tick_hz:={tick_hz:.6g}"
+        f"-p score_per_tick:={score_default:.6f} "
+        f"-p tick_hz:={tick_hz:.6f}"
     )
 
     cov_proc = subprocess.Popen(["bash", "-lc", cov_cmd])

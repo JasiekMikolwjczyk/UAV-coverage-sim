@@ -40,6 +40,8 @@ cd ~/uav-coverage-sim
 ./start_multi.sh
 ./run_multi_mission.sh --config configs/multi_mission.json
 ```
+Config supports per-drone `score_per_tick`, `fov_deg`, `r_max`, and optional `coverage_alt` for coverage weighting.
+Telemetry CSV per drone is written under `data/coverage/multi/telemetry` with timestamped filenames (tick rate = `tick_hz`).
 
 ---
 ## 1) System prerequisites

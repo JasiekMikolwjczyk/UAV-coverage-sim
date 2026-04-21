@@ -2,6 +2,8 @@
 import os
 import time
 import signal
+import math
+import csv
 
 import numpy as np
 import rclpy
@@ -20,6 +22,10 @@ class CoverageNode(Node):
         self.declare_parameter("pose_topic", "/uav/pose")
         self.declare_parameter("pose_topics", Parameter.Type.STRING_ARRAY)
         self.declare_parameter("pose_topic_scores", Parameter.Type.DOUBLE_ARRAY)
+        self.declare_parameter("pose_topic_fov_deg", Parameter.Type.DOUBLE_ARRAY)
+        self.declare_parameter("pose_topic_r_max", Parameter.Type.DOUBLE_ARRAY)
+        self.declare_parameter("pose_topic_alt", Parameter.Type.DOUBLE_ARRAY)
+        self.declare_parameter("telemetry_dir", "")
         self.declare_parameter("out_dir", os.path.expanduser("~/uav-coverage-sim/data/coverage"))
         self.declare_parameter("score_per_tick", 1.0)
         self.declare_parameter("tick_hz", 20.0)
@@ -55,7 +61,38 @@ class CoverageNode(Node):
                 except ValueError:
                     pose_scores = []
 
+        fov_param = self.get_parameter("pose_topic_fov_deg").get_parameter_value()
+        pose_fov = list(fov_param.double_array_value)
+        if not pose_fov:
+            raw = fov_param.string_value
+            if raw:
+                try:
+                    pose_fov = [float(s.strip()) for s in raw.split(",") if s.strip()]
+                except ValueError:
+                    pose_fov = []
+
+        rmax_param = self.get_parameter("pose_topic_r_max").get_parameter_value()
+        pose_rmax = list(rmax_param.double_array_value)
+        if not pose_rmax:
+            raw = rmax_param.string_value
+            if raw:
+                try:
+                    pose_rmax = [float(s.strip()) for s in raw.split(",") if s.strip()]
+                except ValueError:
+                    pose_rmax = []
+
+        alt_param = self.get_parameter("pose_topic_alt").get_parameter_value()
+        pose_alt = list(alt_param.double_array_value)
+        if not pose_alt:
+            raw = alt_param.string_value
+            if raw:
+                try:
+                    pose_alt = [float(s.strip()) for s in raw.split(",") if s.strip()]
+                except ValueError:
+                    pose_alt = []
+
         self.out_dir = self.get_parameter("out_dir").get_parameter_value().string_value
+        self.telemetry_dir = self.get_parameter("telemetry_dir").get_parameter_value().string_value
         self.score_per_tick = float(self.get_parameter("score_per_tick").get_parameter_value().double_value)
         self.tick_hz = float(self.get_parameter("tick_hz").get_parameter_value().double_value)
 
@@ -67,6 +104,10 @@ class CoverageNode(Node):
         self.y = 0.0
         self.z = 0.0
         self.multi_poses = {}
+        self.telemetry_files = {}
+        self.telemetry_writers = {}
+        self.telemetry_state = {}
+        self.telemetry_ts = time.strftime("%Y%m%d_%H%M%S")
 
         if self.mode == "ros":
             self.sub = self.create_subscription(PoseStamped, self.pose_topic, self.pose_cb, 10)
@@ -76,15 +117,46 @@ class CoverageNode(Node):
                 self.pose_topics = [self.pose_topic]
             self.pose_topics = [t.strip() for t in self.pose_topics if t.strip()]
             self.pose_topic_scores = {}
+            self.pose_topic_fov = {}
+            self.pose_topic_rmax = {}
+            self.pose_topic_alt = {}
             if pose_scores and len(pose_scores) != len(self.pose_topics):
                 self.get_logger().warn(
                     "pose_topic_scores length does not match pose_topics; using default weights."
                 )
                 pose_scores = []
+            if pose_fov and len(pose_fov) != len(self.pose_topics):
+                self.get_logger().warn(
+                    "pose_topic_fov_deg length does not match pose_topics; using defaults."
+                )
+                pose_fov = []
+            if pose_rmax and len(pose_rmax) != len(self.pose_topics):
+                self.get_logger().warn(
+                    "pose_topic_r_max length does not match pose_topics; using defaults."
+                )
+                pose_rmax = []
+            if pose_alt and len(pose_alt) != len(self.pose_topics):
+                self.get_logger().warn(
+                    "pose_topic_alt length does not match pose_topics; using pose z."
+                )
+                pose_alt = []
             if pose_scores:
                 self.pose_topic_scores = dict(zip(self.pose_topics, pose_scores))
             else:
                 self.pose_topic_scores = {t: 1.0 for t in self.pose_topics}
+            if pose_fov:
+                self.pose_topic_fov = dict(zip(self.pose_topics, pose_fov))
+            else:
+                self.pose_topic_fov = {t: math.nan for t in self.pose_topics}
+            if pose_rmax:
+                self.pose_topic_rmax = dict(zip(self.pose_topics, pose_rmax))
+            else:
+                self.pose_topic_rmax = {t: math.nan for t in self.pose_topics}
+            if pose_alt:
+                self.pose_topic_alt = dict(zip(self.pose_topics, pose_alt))
+            else:
+                self.pose_topic_alt = {t: math.nan for t in self.pose_topics}
+            self._init_telemetry()
             for topic in self.pose_topics:
                 self.multi_poses[topic] = None
                 self.create_subscription(PoseStamped, topic, self._make_pose_cb(topic), 10)
@@ -153,7 +225,19 @@ class CoverageNode(Node):
                     continue
                 score = self.pose_topic_scores.get(topic, default_score)
                 x, y, z = pose
-                self.grid.apply(x, y, z, score)
+                self._log_telemetry(topic, x, y, z, t)
+                fov = self.pose_topic_fov.get(topic, math.nan)
+                rmax = self.pose_topic_rmax.get(topic, math.nan)
+                alt = self.pose_topic_alt.get(topic, math.nan)
+                self.grid.apply(
+                    x,
+                    y,
+                    z,
+                    score,
+                    fov_deg=None if math.isnan(fov) else fov,
+                    r_max=None if math.isnan(rmax) else rmax,
+                    z_override=None if math.isnan(alt) else alt,
+                )
         else:
             x, y, z = self.synthetic_pose(t)
             self.grid.apply(x, y, z, dt)
@@ -178,6 +262,93 @@ class CoverageNode(Node):
 
         self.get_logger().info(f"Saved: {npy_path}")
         self.get_logger().info(f"Saved: {csv_path}")
+        self._close_telemetry()
+
+    def _init_telemetry(self):
+        if self.telemetry_dir:
+            base_dir = self.telemetry_dir
+        else:
+            base_dir = os.path.join(self.out_dir, "telemetry")
+        os.makedirs(base_dir, exist_ok=True)
+        for topic in self.pose_topics:
+            safe = topic.strip("/").replace("/", "_")
+            path = os.path.join(base_dir, f"{safe}_{self.telemetry_ts}.csv")
+            f = open(path, "w", newline="")
+            writer = csv.writer(f)
+            writer.writerow([
+                "t_s",
+                "x",
+                "y",
+                "z",
+                "vx",
+                "vy",
+                "vz",
+                "speed",
+                "ax",
+                "ay",
+                "az",
+                "accel",
+            ])
+            self.telemetry_files[topic] = f
+            self.telemetry_writers[topic] = writer
+            self.telemetry_state[topic] = {
+                "last_t": None,
+                "last_x": None,
+                "last_y": None,
+                "last_z": None,
+                "last_vx": 0.0,
+                "last_vy": 0.0,
+                "last_vz": 0.0,
+            }
+            self.get_logger().info(f"Telemetry: {path}")
+
+    def _log_telemetry(self, topic: str, x: float, y: float, z: float, t: float):
+        writer = self.telemetry_writers.get(topic)
+        state = self.telemetry_state.get(topic)
+        if writer is None or state is None:
+            return
+        last_t = state["last_t"]
+        if last_t is None:
+            state["last_t"] = t
+            state["last_x"] = x
+            state["last_y"] = y
+            state["last_z"] = z
+            return
+        dt = t - last_t
+        if dt <= 0.0:
+            return
+        dx = x - state["last_x"]
+        dy = y - state["last_y"]
+        dz = z - state["last_z"]
+        vx = dx / dt
+        vy = dy / dt
+        vz = dz / dt
+        ax = (vx - state["last_vx"]) / dt
+        ay = (vy - state["last_vy"]) / dt
+        az = (vz - state["last_vz"]) / dt
+        speed = math.sqrt(vx * vx + vy * vy + vz * vz)
+        accel = math.sqrt(ax * ax + ay * ay + az * az)
+        writer.writerow([f"{t:.3f}", f"{x:.6f}", f"{y:.6f}", f"{z:.6f}",
+                         f"{vx:.6f}", f"{vy:.6f}", f"{vz:.6f}", f"{speed:.6f}",
+                         f"{ax:.6f}", f"{ay:.6f}", f"{az:.6f}", f"{accel:.6f}"])
+        state["last_t"] = t
+        state["last_x"] = x
+        state["last_y"] = y
+        state["last_z"] = z
+        state["last_vx"] = vx
+        state["last_vy"] = vy
+        state["last_vz"] = vz
+
+    def _close_telemetry(self):
+        for f in self.telemetry_files.values():
+            try:
+                f.flush()
+                f.close()
+            except Exception:
+                pass
+        self.telemetry_files = {}
+        self.telemetry_writers = {}
+        self.telemetry_state = {}
 
 
 def main():

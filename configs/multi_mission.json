@@ -7,34 +7,40 @@
       "name": "uav_0",
       "udp": "udp:127.0.0.1:14540",
       "pose_topic": "/uav_0/pose",
-      "score_per_tick": 1.0,
-      "speed": 2.0,
+      "score_per_tick": 3.0,
+      "fov_deg": 20.0,
+      "r_max": 4.0,
+      "speed": 1.0,
       "start_current": true,
       "auto_arm": true,
       "auto_takeoff": true,
-      "waypoints": "0,0,10; 40,0,10"
+      "waypoints": "0,0,10; 10,0,2; 20,5,2"
     },
     {
       "name": "uav_1",
       "udp": "udp:127.0.0.1:14541",
       "pose_topic": "/uav_1/pose",
-      "score_per_tick": 0.5,
+      "score_per_tick": 1.0,
+      "fov_deg": 40.0,
+      "r_max": 100.0,
       "speed": 1.5,
       "start_current": true,
       "auto_arm": true,
       "auto_takeoff": true,
-      "waypoints": "0,5,10; 40,5,10"
+      "waypoints": "0,0,10; 20,10,10; 40,5,10"
     },
     {
       "name": "uav_2",
       "udp": "udp:127.0.0.1:14542",
       "pose_topic": "/uav_2/pose",
-      "score_per_tick": 2.0,
+      "score_per_tick": 1.0,
+      "fov_deg": 40.0,
+      "r_max": 100.0,
       "speed": 2.5,
       "start_current": true,
       "auto_arm": true,
       "auto_takeoff": true,
-      "waypoints": "0,-5,10; 40,-5,10"
+      "waypoints": "0,0,10; 20,-10,10; 40,-5,10"
     }
   ]
 }
