@@ -1,0 +1,46 @@
+{
+  "out_dir": "/home/janmikolajczyk/uav-coverage-sim/data/coverage/multi",
+  "tick_hz": 20.0,
+  "score_per_tick": 1.0,
+  "vehicle": {
+    "name": "ground_vehicle",
+    "world": "multi_quad7",
+    "start_x": -20.0,
+    "start_y": 0.0,
+    "speed": 1.0,
+    "duration": 100.0,
+    "rate_hz": 5.0
+  },
+  "drones": [
+    {
+      "name": "uav_0",
+      "udp": "udp:127.0.0.1:14540",
+      "pose_topic": "/uav_0/pose",
+      "speed": 2.0,
+      "start_current": true,
+      "auto_arm": true,
+      "auto_takeoff": true,
+      "waypoints": "15,0,10; 40,0,10; 70,0,10; 100,0,10"
+    },
+    {
+      "name": "uav_1",
+      "udp": "udp:127.0.0.1:14541",
+      "pose_topic": "/uav_1/pose",
+      "speed": 2.0,
+      "start_current": true,
+      "auto_arm": true,
+      "auto_takeoff": true,
+      "waypoints": "15,6,10; 40,6,10; 70,6,10; 100,6,10"
+    },
+    {
+      "name": "uav_2",
+      "udp": "udp:127.0.0.1:14542",
+      "pose_topic": "/uav_2/pose",
+      "speed": 2.0,
+      "start_current": true,
+      "auto_arm": true,
+      "auto_takeoff": true,
+      "waypoints": "15,-6,10; 40,-6,10; 70,-6,10; 100,-6,10"
+    }
+  ]
+}

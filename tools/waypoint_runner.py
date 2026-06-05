@@ -7,7 +7,7 @@ from pymavlink import mavutil
 
 
 def enu_to_ned(x_enu: float, y_enu: float, z_enu: float):
-    return x_enu, y_enu, -z_enu
+    return y_enu, x_enu, -z_enu
 
 
 def ned_to_enu(x_ned: float, y_ned: float, z_ned: float):

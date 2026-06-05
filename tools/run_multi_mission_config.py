@@ -107,6 +107,33 @@ def main():
 
     cov_proc = subprocess.Popen(["bash", "-lc", cov_cmd])
 
+    vehicle_proc = None
+    vehicle = cfg.get("vehicle")
+    if vehicle:
+        vehicle_cmd = [
+            sys.executable,
+            os.path.join(root_dir, "tools", "move_ground_vehicle.py"),
+            "--world",
+            str(vehicle.get("world", "multi_quad7")),
+            "--name",
+            str(vehicle.get("name", "ground_vehicle")),
+            "--start-x",
+            str(vehicle.get("start_x", -20.0)),
+            "--start-y",
+            str(vehicle.get("start_y", 0.0)),
+            "--speed",
+            str(vehicle.get("speed", 1.0)),
+            "--duration",
+            str(vehicle.get("duration", 100.0)),
+        ]
+        if "z" in vehicle:
+            vehicle_cmd += ["--z", str(vehicle["z"])]
+        if "heading_deg" in vehicle:
+            vehicle_cmd += ["--heading-deg", str(vehicle["heading_deg"])]
+        if "rate_hz" in vehicle:
+            vehicle_cmd += ["--rate-hz", str(vehicle["rate_hz"])]
+        vehicle_proc = subprocess.Popen(vehicle_cmd)
+
     procs = []
     for drone in drones:
         udp = _require_key(drone, "udp")
@@ -166,6 +193,13 @@ def main():
         except subprocess.TimeoutExpired:
             cov_proc.terminate()
 
+    if vehicle_proc and vehicle_proc.poll() is None:
+        vehicle_proc.send_signal(signal.SIGINT)
+        try:
+            vehicle_proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            vehicle_proc.terminate()
+
     run_dir = os.path.join(root_dir, "data", "coverage", "multi_runs")
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     run_path = os.path.join(run_dir, timestamp)
@@ -189,6 +223,8 @@ def main():
                 "Multi-UAV coverage score",
                 "--out",
                 os.path.join(run_path, "coverage_score.png"),
+                "--vehicle-config",
+                os.path.join(run_path, "config.json"),
                 "--no-show",
             ],
             check=False,

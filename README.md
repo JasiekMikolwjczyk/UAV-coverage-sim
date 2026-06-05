@@ -43,6 +43,27 @@ cd ~/uav-coverage-sim
 Config supports per-drone `score_per_tick`, `fov_deg`, `r_max`, and optional `coverage_alt` for coverage weighting.
 Telemetry CSV per drone is written under `data/coverage/multi/telemetry` with timestamped filenames (tick rate = `tick_hz`).
 
+Multi UAV with a simple moving ground vehicle:
+```
+cd ~/uav-coverage-sim
+./start_multi.sh
+./run_vehicle_lead_mission.sh
+```
+The `multi_quad7` world includes `ground_vehicle`, a blue box on the ground.
+`run_vehicle_lead_mission.sh` moves it in a straight line along +X while the three drones fly ahead of it.
+Tune the vehicle and drone waypoints in:
+```
+configs/vehicle_lead_mission.json
+```
+
+Numerical mine scanning simulation:
+```
+cd ~/uav-coverage-sim
+python3 tools/run_scan_simulation.py --config configs/scan_simulation.json
+```
+This generates Gaussian mine fields, SAR detections from two drones, magnetometer verification by the third drone,
+tractor movement gated by unresolved detections, and artifacts under `data/scan_runs/<timestamp>/`.
+
 ---
 ## 1) System prerequisites
 

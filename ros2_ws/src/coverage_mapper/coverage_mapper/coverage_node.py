@@ -7,6 +7,7 @@ import csv
 
 import numpy as np
 import rclpy
+from rclpy.exceptions import ParameterUninitializedException
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from geometry_msgs.msg import PoseStamped
@@ -15,6 +16,39 @@ from coverage_mapper.coverage_core import CoverageParams, CoverageGrid
 
 
 class CoverageNode(Node):
+    def _parameter_value_or_none(self, name: str):
+        try:
+            return self.get_parameter(name).get_parameter_value()
+        except ParameterUninitializedException:
+            return None
+
+    @staticmethod
+    def _parse_string_array(value):
+        if value is None:
+            return []
+        items = list(value.string_array_value)
+        if items:
+            return items
+        raw = value.string_value
+        if raw:
+            return [t.strip() for t in raw.split(",") if t.strip()]
+        return []
+
+    @staticmethod
+    def _parse_double_array(value):
+        if value is None:
+            return []
+        items = list(value.double_array_value)
+        if items:
+            return items
+        raw = value.string_value
+        if raw:
+            try:
+                return [float(s.strip()) for s in raw.split(",") if s.strip()]
+            except ValueError:
+                return []
+        return []
+
     def __init__(self):
         super().__init__("coverage_node")
 
@@ -44,52 +78,11 @@ class CoverageNode(Node):
         self.mode = self.get_parameter("mode").get_parameter_value().string_value
         self.pose_topic = self.get_parameter("pose_topic").get_parameter_value().string_value
 
-        pose_topics_param = self.get_parameter("pose_topics").get_parameter_value()
-        self.pose_topics = list(pose_topics_param.string_array_value)
-        if not self.pose_topics:
-            raw = pose_topics_param.string_value
-            if raw:
-                self.pose_topics = [t.strip() for t in raw.split(",") if t.strip()]
-
-        score_param = self.get_parameter("pose_topic_scores").get_parameter_value()
-        pose_scores = list(score_param.double_array_value)
-        if not pose_scores:
-            raw = score_param.string_value
-            if raw:
-                try:
-                    pose_scores = [float(s.strip()) for s in raw.split(",") if s.strip()]
-                except ValueError:
-                    pose_scores = []
-
-        fov_param = self.get_parameter("pose_topic_fov_deg").get_parameter_value()
-        pose_fov = list(fov_param.double_array_value)
-        if not pose_fov:
-            raw = fov_param.string_value
-            if raw:
-                try:
-                    pose_fov = [float(s.strip()) for s in raw.split(",") if s.strip()]
-                except ValueError:
-                    pose_fov = []
-
-        rmax_param = self.get_parameter("pose_topic_r_max").get_parameter_value()
-        pose_rmax = list(rmax_param.double_array_value)
-        if not pose_rmax:
-            raw = rmax_param.string_value
-            if raw:
-                try:
-                    pose_rmax = [float(s.strip()) for s in raw.split(",") if s.strip()]
-                except ValueError:
-                    pose_rmax = []
-
-        alt_param = self.get_parameter("pose_topic_alt").get_parameter_value()
-        pose_alt = list(alt_param.double_array_value)
-        if not pose_alt:
-            raw = alt_param.string_value
-            if raw:
-                try:
-                    pose_alt = [float(s.strip()) for s in raw.split(",") if s.strip()]
-                except ValueError:
-                    pose_alt = []
+        self.pose_topics = self._parse_string_array(self._parameter_value_or_none("pose_topics"))
+        pose_scores = self._parse_double_array(self._parameter_value_or_none("pose_topic_scores"))
+        pose_fov = self._parse_double_array(self._parameter_value_or_none("pose_topic_fov_deg"))
+        pose_rmax = self._parse_double_array(self._parameter_value_or_none("pose_topic_r_max"))
+        pose_alt = self._parse_double_array(self._parameter_value_or_none("pose_topic_alt"))
 
         self.out_dir = self.get_parameter("out_dir").get_parameter_value().string_value
         self.telemetry_dir = self.get_parameter("telemetry_dir").get_parameter_value().string_value
