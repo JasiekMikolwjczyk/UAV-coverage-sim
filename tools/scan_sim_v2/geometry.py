@@ -93,15 +93,10 @@ def seg_dist_array(px, py, p0, p1):
 
 # --------------------------------------------------------------------------- local scans (v1 copies)
 
-def local_lawnmower_segments(cx: float, cy: float, scan_cfg: dict, size_factor: float = 1.0, min_side_m: float = 0.0):
+def local_lawnmower_segments(cx: float, cy: float, scan_cfg: dict):
+    """v1 local scan (legacy_logistic mode only)."""
     area = float(scan_cfg.get("local_scan_area_m", scan_cfg.get("line_length_m", 6.0)))
     line_len = float(scan_cfg.get("line_length_m", area))
-    if size_factor != 1.0:
-        area *= size_factor
-        line_len *= size_factor
-    if min_side_m > area:
-        line_len = line_len * min_side_m / area
-        area = min_side_m
     swath = float(scan_cfg["swath_m"])
     overlap = float(scan_cfg.get("transverse_overlap", 0.5))
     spacing = max(0.1, swath * (1.0 - overlap))
@@ -128,6 +123,40 @@ def local_lawnmower_segments(cx: float, cy: float, scan_cfg: dict, size_factor: 
             end = (x_line, cy + half_line)
         segments.append((start, end))
         reverse = not reverse
+    return segments
+
+
+def local_scan_side(geom: dict, sigma: float, size_factor: float = 1.0) -> float:
+    """Rate-based local scan side (SPEC 4.3): L = max(min_scan_side_m, 2*2.5*sigma + swath_m).
+
+    scan_size factors (Paper 2 hook) scale L.
+    """
+    swath = float(geom["swath_m"])
+    side = max(float(geom["min_scan_side_m"]), 2.0 * 2.5 * sigma + swath)
+    return side * size_factor
+
+
+def local_square_segments(cx: float, cy: float, geom: dict, side: float):
+    """Square boustrophedon of the given side centred on (cx, cy) (rate-based mode).
+
+    Lines run along y over the full side; their x positions go from -side/2 + swath/2 to
+    +side/2 - swath/2 at spacing swath*(1 - overlap) (last spacing shortened), so the swath
+    covers the square exactly. n_lines = ceil((side - swath)/spacing) + 1 and the path length
+    (first line start to last line end) is n_lines*side + (side - swath).
+    """
+    swath = float(geom["swath_m"])
+    spacing = max(1e-3, swath * (1.0 - float(geom.get("transverse_overlap", 0.0))))
+    span = max(0.0, side - swath)
+    n = int(math.ceil(span / spacing - 1e-9)) + 1
+    half = 0.5 * side
+    segments = []
+    for j in range(n):
+        dx = -0.5 * span + min(j * spacing, span)
+        x_line = cx + dx
+        if j % 2 == 0:
+            segments.append(((x_line, cy - half), (x_line, cy + half)))
+        else:
+            segments.append(((x_line, cy + half), (x_line, cy - half)))
     return segments
 
 
@@ -259,6 +288,7 @@ class CorridorPlanner:
         self.x_start = x_start
         self.x_end = x_end
         self.offsets = formation_offsets(n, sep)
+        self.offset_vecs = [(0.0, off) for off in self.offsets]
         self.n = n
         cover = (n - 1) * sep + swath
         self.k = int(math.ceil(width / cover - 1e-9))
@@ -300,7 +330,7 @@ class CorridorPlanner:
         return self.frontier
 
     def positions(self):
-        return [(self.center[0], self.center[1] + off) for off in self.offsets]
+        return [(self.center[0] + ox, self.center[1] + oy) for ox, oy in self.offset_vecs]
 
     @staticmethod
     def _lerp(leg, t):
@@ -328,8 +358,51 @@ class CorridorPlanner:
                 self.leg_i += 1
                 self.leg_t = 0.0
         self.done = self.leg_i >= len(self.legs)
-        segs = [[((a[0], a[1] + off), (b[0], b[1] + off)) for a, b in center_segs] for off in self.offsets]
+        segs = [[((a[0] + ox, a[1] + oy), (b[0] + ox, b[1] + oy)) for a, b in center_segs]
+                for ox, oy in self.offset_vecs]
         return StepResult(self.positions(), segs, energy, self.frontier, self.done)
+
+
+class CrossTrackPlanner(CorridorPlanner):
+    """Cross-track screening (SPEC 6.1, v2.1).
+
+    Lines run across the corridor (y from lane_y - W/2 to lane_y + W/2, then back). The N
+    screeners fly the same line side by side, offset along x by sep = swath*(1 - overlap).
+    After each line, a turn of turn_time moves the block forward by N*sep. The frontier is the
+    x up to which the ground is screened, i.e. the leading boundary (block start + N*sep) of the
+    last completed block, clipped to the lane end. Long-run frontier speed: N*sep / (W/v + turn_time).
+    """
+
+    def __init__(self, lane_y, direction, x_start, x_end, n, sep, swath, speed, width, turn_time):
+        self.lane_y = lane_y
+        self.direction = direction
+        self.x_start = x_start
+        self.x_end = x_end
+        self.n = n
+        self.k = 1
+        self.offsets = formation_offsets(n, sep)
+        self.offset_vecs = [(direction * off, 0.0) for off in self.offsets]
+        adv = n * sep
+        total = abs(x_end - x_start)
+        nblk = max(1, int(math.ceil(total / adv - 1e-9)))
+        y_lo, y_hi = lane_y - 0.5 * width, lane_y + 0.5 * width
+        centre_off = 0.5 * swath + 0.5 * (n - 1) * sep
+        legs = []
+        for b in range(nblk):
+            xb = x_start + direction * b * adv
+            xc = xb + direction * centre_off
+            ya, yb = (y_lo, y_hi) if b % 2 == 0 else (y_hi, y_lo)
+            done_x = x_start + direction * min((b + 1) * adv, total)
+            legs.append(Leg((xc, ya), (xc, yb), width / speed, speed, True, "scan", done_x))
+            if b < nblk - 1:
+                legs.append(Leg((xc, yb), (xc + direction * adv, yb), turn_time,
+                                adv / turn_time if turn_time > 0 else 0.0, True, "turn"))
+        self.legs = [leg for leg in legs if leg.duration > 0.0]
+        self.leg_i = 0
+        self.leg_t = 0.0
+        self.center = self.legs[0].p0 if self.legs else (x_start, lane_y)
+        self.frontier = x_start
+        self.done = not self.legs
 
 
 def corridor_width(cfg):
@@ -348,11 +421,17 @@ def make_planner(mode, lane_y, direction, x_start, x_end, n, swath, overlap, spe
             return LaneAbreastPlanner(lane_y, direction, x_start, x_end, n, sep, speed)
         return CorridorPlanner(lane_y, direction, x_start, x_end, n, sep, swath, speed, width,
                                segment_length, turn_time)
+    if mode == "cross_track":
+        sep = swath * (1.0 - overlap)
+        return CrossTrackPlanner(lane_y, direction, x_start, x_end, n, sep, swath, speed, width, turn_time)
     raise ValueError(f"unknown screening_mode {mode}")
 
 
-def frontier_speed_formula(n, swath, overlap, speed, width, segment_length, turn_time):
-    """Long-run frontier speed of the corridor planner (exact for the leg model above)."""
+def frontier_speed_formula(n, swath, overlap, speed, width, segment_length, turn_time, mode="corridor"):
+    """Long-run frontier speed (exact for the leg models above). Returns (v_f, k)."""
+    if mode == "cross_track":
+        sep = swath * (1.0 - overlap)
+        return n * sep / (width / speed + turn_time), 1
     sep, cover, k = corridor_geometry(n, swath, overlap, width)
     if k == 1:
         return speed, k

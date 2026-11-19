@@ -124,7 +124,10 @@ def build_context(cfg, sensor_lib=None, mine_types=None, inject=0):
     c.max_speed = float(tr["max_speed_mps"])
     c.block_mode = tr.get("block_mode", "corridor_ahead" if c.legacy else "standoff")
     c.standoff = float(tr.get("standoff_m", 5.0))
-    c.excavation_time = float(cfg.get("decision", {}).get("excavation_time_s", 0.0 if c.legacy else 300.0))
+    c.investigation_time = investigation_time(cfg, c.legacy)
+    c.on_reject = cfg.get("decision", {}).get("on_reject", "release")
+    if c.on_reject not in ("release", "investigate"):
+        raise ValueError(f"decision.on_reject must be 'release' or 'investigate', not {c.on_reject!r}")
     c.prior = float(cfg.get("decision", {}).get("prior_mine_probability", 0.5))
     c.reserve = float(cfg.get("battery", {}).get("reserve_percent", 0.0))
     c.battery_enforce = bool(cfg.get("battery", {}).get("enforce", True))
@@ -251,6 +254,16 @@ def build_context(cfg, sensor_lib=None, mine_types=None, inject=0):
     return c
 
 
+def investigation_time(cfg, legacy=False):
+    """decision.investigation_time_s (SPEC 4.4); the deprecated excavation_time_s is mapped."""
+    dec = cfg.get("decision", {})
+    if "investigation_time_s" in dec:
+        return float(dec["investigation_time_s"])
+    if "excavation_time_s" in dec:
+        return float(dec["excavation_time_s"])
+    return 0.0 if legacy else 300.0
+
+
 def localization_std(c, layer, t, x, y):
     lm = c.loc_model
     if lm.get("kind", "static") == "zones":
@@ -296,7 +309,7 @@ def run(c, record_paths=True):
     tractor_prev_error = 0.0
     tractor_dist = 0.0
     time_split = {"moving": 0.0, "wait_confirmation": 0.0, "wait_frontier": 0.0,
-                  "wait_excavation": 0.0, "done_waiting": 0.0}
+                  "wait_investigation_confirmed": 0.0, "wait_investigation": 0.0, "done_waiting": 0.0}
     thr = float(cfg.get("decision", {}).get("confirmed_mine_threshold", 0.5))
 
     prim = c.layers[0]
@@ -319,19 +332,35 @@ def run(c, record_paths=True):
             return
         if o.confirmed:
             o.found = o.is_mine
+            o.t_found = o.t_done
             o.confirm_result = "confirmed"
-            if o.in_corridor and c.excavation_time > 0:
-                o.block_state = "excavation"
-                heapq.heappush(excavations, (o.t_done + c.excavation_time, idx))
+            if o.in_corridor and c.investigation_time > 0:
+                o.block_state = "investigation_confirmed"
+                heapq.heappush(excavations, (o.t_done + c.investigation_time, idx))
             else:
-                o.blocked = False
-                o.block_state = ""
-                blocked.discard(idx)
+                release(o)
         else:
             o.confirm_result = "rejected"
-            o.blocked = False
-            o.block_state = ""
-            blocked.discard(idx)
+            if c.on_reject == "investigate" and o.in_corridor:
+                # SPEC 4.4: a rejected in-corridor suspicion is investigated on the ground.
+                o.investigated = True
+                if c.investigation_time > 0:
+                    o.block_state = "investigation_rejected"
+                    heapq.heappush(excavations, (o.t_done + c.investigation_time, idx))
+                    return
+                end_investigation(o, o.t_done)
+            release(o)
+
+    def release(o):
+        o.blocked = False
+        o.block_state = ""
+        blocked.discard(o.idx)
+
+    def end_investigation(o, t_end):
+        if o.block_state == "investigation_rejected" or (o.investigated and not o.found):
+            o.found = o.is_mine
+            if o.is_mine:
+                o.t_found = t_end
 
     def pop_events(t_now):
         while events and events[0][0] <= t_now:
@@ -340,11 +369,10 @@ def run(c, record_paths=True):
                 confirmers[cid].pending -= 1
             complete(idx, t_now)
         while excavations and excavations[0][0] <= t_now:
-            _, idx = heapq.heappop(excavations)
+            t_end, idx = heapq.heappop(excavations)
             o = objs[idx]
-            o.blocked = False
-            o.block_state = ""
-            blocked.discard(idx)
+            end_investigation(o, t_end)
+            release(o)
 
     def execute_task(conf, sid, scan_size, t_now):
         o = objs[sid]
@@ -356,7 +384,8 @@ def run(c, record_paths=True):
             segments = geo.local_lawnmower_segments(sx, sy, geom)
         else:
             sigma = localization_std(c, prim, o.t_arrival, sx, sy)
-            segments = geo.local_lawnmower_segments(sx, sy, geom, SCAN_SIZES[scan_size], 2.0 * 2.5 * sigma)
+            side = geo.local_scan_side(geom, sigma, SCAN_SIZES[scan_size])
+            segments = geo.local_square_segments(sx, sy, geom, side)
         scan_len = geo.segment_path_length(segments, segments[0][0] if segments else (sx, sy))
         travel = math.hypot((segments[0][0][0] if segments else sx) - conf.pos[0],
                             (segments[0][0][1] if segments else sy) - conf.pos[1])
@@ -472,13 +501,14 @@ def run(c, record_paths=True):
             o.confirm_result = "final"
             o.t_assigned = t_now
             o.t_done = t_now
+            o.t_found = t_now
             o.final_prob = 1.0
             o.posterior = post["prior"] if post else math.nan
-            if o.in_corridor and c.excavation_time > 0:
+            if o.in_corridor and c.investigation_time > 0:
                 o.blocked = True
-                o.block_state = "excavation"
+                o.block_state = "investigation_confirmed"
                 blocked.add(o.idx)
-                heapq.heappush(excavations, (t_now + c.excavation_time, o.idx))
+                heapq.heappush(excavations, (t_now + c.investigation_time, o.idx))
             return
         queue[o.idx] = QueueItem(o.idx, o.suspect_x, o.suspect_y, (0.0, 0.0), t_now, o.in_corridor, score, True)
         n_queued += 1
@@ -685,7 +715,8 @@ def run(c, record_paths=True):
             elif tractor_done:
                 time_split["done_waiting"] += dt
             elif binding is not None and (is_blocked or c.block_mode == "standoff"):
-                key = "wait_excavation" if binding.block_state == "excavation" else "wait_confirmation"
+                key = {"investigation_confirmed": "wait_investigation_confirmed",
+                       "investigation_rejected": "wait_investigation"}.get(binding.block_state, "wait_confirmation")
                 time_split[key] += dt
             else:
                 time_split["wait_frontier"] += dt
@@ -743,7 +774,8 @@ def run(c, record_paths=True):
                 t = max(t, done_t)
                 pop_events(t)
             while excavations:
-                _, idx = heapq.heappop(excavations)
+                t_end, idx = heapq.heappop(excavations)
+                end_investigation(objs[idx], t_end)
                 objs[idx].blocked = False
                 objs[idx].block_state = ""
     time_split["done_waiting"] += t - drain_t0
@@ -803,6 +835,8 @@ def object_outcome(o):
     if o.is_mine:
         if not o.screen_detected:
             return "screening_miss"
+        if o.found and o.investigated:
+            return "found_by_investigation"
         if o.found:
             return "true_positive"
         if o.verified:
@@ -916,6 +950,10 @@ def build_metrics(c, result, elapsed_s, stop_reason, mission_complete, confirmer
     m["n_suspicions"] = len(susp)
     m["n_false_alarms"] = len(fa)
     m["false_confirmations"] = fc
+    m["n_investigated_rejections"] = sum(1 for o in objs if o.investigated and not o.injected)
+    m["n_found_by_investigation"] = sum(1 for o in natural if o.outcome == "found_by_investigation")
+    m["on_reject"] = c.on_reject
+    m["investigation_time_s"] = c.investigation_time
     m["precision"] = tp / (tp + fc) if (tp + fc) > 0 else None
     m["false_alarms_per_m2"] = len(fa) / scanned_area if scanned_area > 0 else None
     # throughput
@@ -929,7 +967,10 @@ def build_metrics(c, result, elapsed_s, stop_reason, mission_complete, confirmer
     m["tractor_moving_s"] = time_split["moving"]
     m["tractor_wait_confirmation_s"] = time_split["wait_confirmation"]
     m["tractor_wait_frontier_s"] = time_split["wait_frontier"]
-    m["tractor_wait_excavation_s"] = time_split["wait_excavation"]
+    m["tractor_wait_investigation_confirmed_s"] = time_split["wait_investigation_confirmed"]
+    m["tractor_wait_investigation_s"] = time_split["wait_investigation"]
+    # Deprecated alias (v2.0 name), kept for one release; not part of the time split.
+    m["tractor_wait_excavation_s"] = time_split["wait_investigation_confirmed"]
     m["tractor_done_waiting_s"] = time_split["done_waiting"]
     # energy
     m["screener_energy_Wh"] = screener_E
@@ -964,7 +1005,7 @@ def injection_metrics(result, prefix="inj_"):
     m = {}
 
     def before(o):
-        return o.found and o.t_done <= o.t_vehicle_reach
+        return o.found and o.t_found <= o.t_vehicle_reach
 
     k = sum(1 for o in inj if before(o))
     p, lo, hi = wilson(k, len(inj))
@@ -984,7 +1025,8 @@ def injection_metrics(result, prefix="inj_"):
         m[f"{prefix}unscreened_{cls}"] = sum(1 for o in oc if not o.sar_seen)
         m[f"{prefix}screen_miss_{cls}"] = sum(1 for o in oc if o.sar_seen and not o.screen_detected)
         m[f"{prefix}confirm_miss_{cls}"] = sum(1 for o in oc if o.screen_detected and not o.found)
-        m[f"{prefix}late_{cls}"] = sum(1 for o in oc if o.found and o.t_done > o.t_vehicle_reach)
+        m[f"{prefix}late_{cls}"] = sum(1 for o in oc if o.found and o.t_found > o.t_vehicle_reach)
+        m[f"{prefix}found_by_investigation_{cls}"] = sum(1 for o in oc if o.found and o.investigated)
     rm = result["metrics"]
     for key in ("elapsed_s", "mean_vehicle_speed_mps", "fleet_energy_Wh", "n_suspicions", "stop_reason"):
         m[f"{prefix}{key}"] = rm[key]

@@ -5,16 +5,16 @@ Approximations (stated in docs/scan_sim_v2.md):
   including the extra transit leg for even k.
 * Expectations over depth/class: deterministic numerical integration (depth grids per type, with
   the residual hard-target selection weights; clutter depth by fixed-seed Monte Carlo).
-* E[travel]: numerical integration by fixed-seed Monte Carlo (20,000 samples). Busy confirmer
-  (FIFO, M confirmers): next suspicion is Gamma(M, v_f/lambda) metres further along the corridor,
-  lateral positions uniform in W; travel = previous scan end -> next scan start. Idle confirmer:
-  starts at the idle point (safe_distance ahead of the vehicle, i.e. at the frontier) and the
-  suspicion is uniform within one segment ahead and uniform across W. Mixed by the utilisation
-  (fixed-point iteration).
+* E[travel]: numerical integration by fixed-seed Monte Carlo (20,000 samples), see
+  service_time_stats: busy start (probability Erlang C) from the previous scan end, Gamma(M, v_f/lambda)
+  metres along the corridor; idle start from the SPEC 6.2 idle point (vehicle + safe_distance, lateral
+  offset of the lowest-index free confirmer), which trails the frontier by
+  gap = max(0, v_f R + standoff - safe_distance); fixed-point iteration on E[S] and the gap.
 * Waiting time: M/G/M with the Allen-Cunneen approximation
   Wq = C(M, lambda E[S]) / (M/E[S] - lambda) * (ca^2 + cs^2) / 2, ca^2 = 1 (Poisson arrivals).
-* Arrivals use the screened width W_s = max(W, C) for a single pass (C = formation cover), else W:
-  suspicions outside the corridor are still queued (SPEC 6.2) and load the confirmers.
+* Arrivals use the screened width W_s: max(W, C) for a single along-track pass (C = formation cover),
+  W for multi-pass corridor screening, W + pi r^2 / sep for cross-track lines (end caps, r = swath/2).
+  Suspicions outside the corridor are still queued (SPEC 6.2) and load the confirmers.
 * Vehicle speed (per lane of length L, mean over lanes):
     T_lane = max(L / v0, L * n_m * E[S] / M) + max(0, R - B)
     R = max(q_c * r, q_x * (r + T_exc)),  r = Wq + E[S],
@@ -31,6 +31,7 @@ import math
 import numpy as np
 
 from . import geometry as geo
+from .simulate import investigation_time
 from .model import (build_confirm_sensor, build_screen_sensor, load_sensor_library, sv)
 from .population import TypeDepthSampler, load_mine_types
 
@@ -126,47 +127,82 @@ def clutter_expectation(cfg, fn):
 
 # --------------------------------------------------------------------------- travel / service
 
-def _scan_template(geom, size_factor=1.0, min_side=0.0):
-    segs = geo.local_lawnmower_segments(0.0, 0.0, geom, size_factor, min_side)
+def _scan_template(geom, sigma, size_factor=1.0):
+    segs = geo.local_square_segments(0.0, 0.0, geom, geo.local_scan_side(geom, sigma, size_factor))
     start = segs[0][0]
     end = segs[-1][1]
     length = geo.segment_path_length(segs, start)
     return segs, start, end, length
 
 
-def service_time_stats(geom, lam, v_f, W, M, seg_len, min_side=0.0, iters=6):
-    segs, start, end, scan_len = _scan_template(geom, 1.0, min_side)
+_MC_CACHE = {}
+
+
+def _mc_draws(W, M):
+    """Fixed-seed draws for service_time_stats, cached (same numbers for every call with this W, M)."""
+    key = (W, max(M, 1))
+    if key not in _MC_CACHE:
+        rng = np.random.default_rng(2024)
+        y1 = rng.uniform(-W / 2, W / 2, N_MC)
+        y2 = rng.uniform(-W / 2, W / 2, N_MC)
+        g = rng.gamma(max(M, 1), 1.0, N_MC)
+        u = rng.uniform(0.0, 1.0, N_MC)
+        uj = rng.uniform(0.0, 1.0, N_MC)
+        ub = rng.uniform(0.0, 1.0, N_MC)
+        if len(_MC_CACHE) > 256:
+            _MC_CACHE.clear()
+        _MC_CACHE[key] = (y1, y2, u, uj, ub, g)
+    return _MC_CACHE[key]
+
+
+def service_time_stats(geom, lam, v_f, W, M, seg_len, sigma, gap_m=0.0, ahead=True, idle_spacing=3.0, iters=12):
+    """E[S], E[travel], SCV of service time (fixed-seed Monte Carlo integration).
+
+    A task starts either right after the confirmer's previous task (probability = Erlang C, i.e.
+    the queue is non-empty when a confirmer frees up; 1 when saturated) or from the confirmer's
+    idle point. Busy start: the next suspicion in FIFO order for this confirmer is Gamma(M, v_f/lambda)
+    metres further along the corridor, lateral positions uniform in W. Idle start: the idle point
+    is (vehicle + safe_distance, lane_y + (j - (M-1)/2) * idle_spacing) with j the lowest-index
+    free confirmer (P(j) ~ rho^j); it lies gap_m behind the frontier; the suspicion lies within one
+    block/segment of the frontier (ahead for corridor segments, behind for cross-track blocks).
+    """
+    segs, start, end, scan_len = _scan_template(geom, sigma)
     vt = float(geom["transit_speed_mps"])
     scan_s = scan_len / float(geom["scan_speed_mps"])
-    rng = np.random.default_rng(2024)
-    y1 = rng.uniform(-W / 2, W / 2, N_MC)
-    y2 = rng.uniform(-W / 2, W / 2, N_MC)
-    g = rng.gamma(max(M, 1), 1.0, N_MC)
-    u = rng.uniform(0.0, 1.0, N_MC)
-    # idle: from idle point (0, 0) to scan start of a suspicion within one segment ahead
-    idle_dx = u * seg_len + start[0]
-    idle_dy = y2 + start[1]
-    t_idle = np.hypot(idle_dx, idle_dy) / vt
-    rho = 0.5
+    y1, y2, u, uj, ub, g = _mc_draws(W, M)
+    sign = 1.0 if ahead else -1.0
+    es = scan_s
     for _ in range(iters):
+        a = lam * es
+        rho1 = min(a / max(M, 1), 0.999)
+        p_busy = 1.0 if a >= M else erlang_c(M, a)
+        if M > 1:
+            w = rho1 ** np.arange(M)
+            cdf = np.cumsum(w / w.sum())
+            j = np.minimum(np.searchsorted(cdf, uj), M - 1)
+            idle_y = (j - (M - 1) / 2.0) * idle_spacing
+        else:
+            idle_y = 0.0
+        idle_dx = gap_m + sign * u * seg_len + start[0]
+        idle_dy = y2 - idle_y + start[1]
+        t_idle = np.hypot(idle_dx, idle_dy) / vt
         spacing = v_f / lam if lam > 0 else seg_len
         dx = g * spacing + start[0] - end[0]
         dy = (y2 + start[1]) - (y1 + end[1])
         t_busy = np.hypot(dx, dy) / vt
-        n_busy = int(round(min(1.0, rho) * N_MC))
-        travel = np.concatenate([t_busy[:n_busy], t_idle[n_busy:]])
+        travel = np.where(ub < p_busy, t_busy, t_idle)
         S = travel + scan_s
-        es = float(S.mean())
-        rho_new = lam * es / max(M, 1)
-        if abs(rho_new - rho) < 1e-6:
+        es_new = float(S.mean())
+        if abs(es_new - es) < 1e-6 * max(es, 1.0):
+            es = es_new
             break
-        rho = rho_new
+        es = es_new
     cs2 = float(S.var() / es ** 2) if es > 0 else 0.0
-    return {"E_travel_s": float(travel.mean()), "scan_s": scan_s, "E_S": es, "cs2": cs2}
+    return {"E_travel_s": float(travel.mean()), "scan_s": scan_s, "E_S": es, "cs2": cs2, "p_busy_start": p_busy}
 
 
-def mean_spatial_factor(geom, sigma, min_side=0.0):
-    segs, _, _, _ = _scan_template(geom, 1.0, min_side)
+def mean_spatial_factor(geom, sigma):
+    segs, _, _, _ = _scan_template(geom, sigma)
     rng = np.random.default_rng(7)
     px = rng.normal(0.0, sigma, 4000)
     py = rng.normal(0.0, sigma, 4000)
@@ -199,18 +235,27 @@ def analyze(cfg, sensor_lib=None, mine_types=None, screen_overrides=None, n_scre
         if cpre not in lib["sensors"][cname]["presets"]:
             cpre = "nominal"
         cs = build_confirm_sensor(lib, cname, cpre, team.get("confirming_overrides"))
+    on_reject = cfg.get("decision", {}).get("on_reject", "release")
     tr = cfg["tractor"]
     W = float(tr["width_m"]) + 2.0 * float(tr["safety_margin_m"])
     seg_len = float(team.get("segment_length_m", 10.0))
     turn = float(team.get("turn_time_s", 3.0))
     mode = team.get("screening_mode", "corridor")
     _, cover, _ = geo.corridor_geometry(N, ss.swath_m, ss.overlap, W)
-    if mode == "corridor":
-        v_f, k = geo.frontier_speed_formula(N, ss.swath_m, ss.overlap, ss.speed_mps, W, seg_len, turn)
+    if mode in ("corridor", "cross_track"):
+        v_f, k = geo.frontier_speed_formula(N, ss.swath_m, ss.overlap, ss.speed_mps, W, seg_len, turn, mode)
     else:
         v_f, k = ss.speed_mps, 1
-    # Width actually screened: a single pass wider than the corridor also screens (and queues) outside it.
-    W_s = max(W, cover) if k == 1 else W
+    # Width actually screened: a single along-track pass wider than the corridor also screens (and
+    # queues) outside it. Cross-track lines span the corridor and their half-disc end caps add
+    # pi*r^2 per line (r = swath/2) beyond it: W_s = W + pi*r^2/sep.
+    if mode == "cross_track":
+        W_s = W + math.pi * (0.5 * ss.swath_m) ** 2 / (ss.swath_m * (1.0 - ss.overlap))
+    else:
+        W_s = max(W, cover) if k == 1 else W
+    if mode == "cross_track":
+        # Suspicions appear within the block just screened (idle-start travel model).
+        seg_len = N * ss.swath_m * (1.0 - ss.overlap)
     a = ss.swath_m * ss.speed_mps
     eta = v_f * W / (N * a) if a > 0 else 0.0
     v_max = float(tr["max_speed_mps"])
@@ -240,12 +285,25 @@ def analyze(cfg, sensor_lib=None, mine_types=None, screen_overrides=None, n_scre
         "N_req_v2": math.ceil(2.0 * W / (eta * a)) if eta * a > 0 else None,
     }
     sigma = ss.localization_std_m
+    v0 = min(v_max, v_f)
+    n_m = lam / v_f if v_f > 0 else math.inf
+    n_c = n_m * W / W_s  # suspicions per metre inside the corridor (only these block the vehicle)
+    t_exc = investigation_time(cfg)
+    standoff = float(tr.get("standoff_m", 5.0))
+    safe = float(tr["safe_distance_m"])
+
+    def lag(es_, wq_, rho_, p_c_):
+        """Resolution lag R (see module docstring)."""
+        # In-corridor suspicions that end up blocking for t_exc: confirmed, plus rejected under investigate.
+        p_block = p_c_ + (1.0 - p_c_) if on_reject == "investigate" else p_c_
+        r = (wq_ if (M > 0 and rho_ < 1.0 and math.isfinite(wq_)) else 0.0) + es_
+        q_c = 1.0 - math.exp(-n_c * v_f * r) if math.isfinite(n_c) else 1.0
+        q_x = 1.0 - math.exp(-n_c * p_block * v_f * (r + t_exc)) if (t_exc > 0 and math.isfinite(n_c)) else 0.0
+        return max(q_c * r, q_x * (r + t_exc))
+
     if M > 0:
         geom = cs.geom
-        min_side = 2.0 * 2.5 * sigma
-        st = service_time_stats(geom, lam, v_f, W, M, seg_len, min_side)
-        es = st["E_S"]
-        sf = mean_spatial_factor(geom, sigma, min_side)
+        sf = mean_spatial_factor(geom, sigma)
         pc_m = mine_expectations(sampler, lambda c_, d: ss.pd_class_depth(c_, d) * cs.p_class_depth(c_, d), nmf)
         p_detect = sum(v["share"] * v["mean"] for v in pc_m.values()) * sf
         p_detect_cls = {c_: v["mean"] * sf for c_, v in pc_m.items()}
@@ -254,10 +312,27 @@ def analyze(cfg, sensor_lib=None, mine_types=None, screen_overrides=None, n_scre
         else:
             p_conf_clutter = cs.p_class_depth("metal_clutter", 0.05) * sf
         p_c = (rho_mine * p_detect + clutter_rate * p_conf_clutter) / (rho_mine * pd_mine + clutter_rate) if lam > 0 else 0.0
-        rho = lam * es / M
-        wq = allen_cunneen_wq(lam, es, M, st["cs2"])
+        # Idle confirmers wait at vehicle + safe_distance; the vehicle trails the frontier by
+        # max(safe_distance, v_f * R + standoff). Fixed-point iteration on the gap.
+        gap = 0.0
+        idle_spacing = float(team.get("confirmer_idle_spacing_m", 3.0))
+        for _ in range(6):
+            st = service_time_stats(geom, lam, v_f, W, M, seg_len, sigma, gap, mode != "cross_track", idle_spacing)
+            es = st["E_S"]
+            rho = lam * es / M
+            wq = allen_cunneen_wq(lam, es, M, st["cs2"])
+            new_gap = max(0.0, v_f * lag(es, wq, rho, p_c) + standoff - safe)
+            if rho >= 1.0 or abs(new_gap - gap) < 0.05:
+                gap = new_gap
+                break
+            gap = new_gap
+        if on_reject == "investigate":
+            # SPEC 4.4: rejected in-corridor suspicions are investigated, so no confirmer loss.
+            p_detect = pd_mine
+            p_detect_cls = {c_: v["mean"] for c_, v in pd_m.items()}
         m_star = max(1, math.ceil(lam * es / 0.8))
         out.update({"E_travel_s": st["E_travel_s"], "scan_s": st["scan_s"], "E_S": es, "cs2": st["cs2"],
+                    "p_busy_start": st["p_busy_start"], "idle_gap_m": gap,
                     "utilization": rho, "Wq_s": wq, "M_star": m_star, "mean_spatial_factor": sf,
                     "p_confirm_given_suspicion": p_c})
     else:
@@ -267,36 +342,29 @@ def analyze(cfg, sensor_lib=None, mine_types=None, screen_overrides=None, n_scre
         out.update({"E_travel_s": 0.0, "scan_s": 0.0, "E_S": 0.0, "cs2": 0.0, "utilization": 0.0,
                     "Wq_s": 0.0, "M_star": 0, "p_confirm_given_suspicion": 1.0})
 
-    v0 = min(v_max, v_f)
-    n_m = lam / v_f if v_f > 0 else math.inf
-    t_exc = float(cfg.get("decision", {}).get("excavation_time_s", 300.0))
-    standoff = float(tr.get("standoff_m", 5.0))
-    B = max(0.0, float(tr["safe_distance_m"]) - standoff) / v0 if v0 > 0 else 0.0
+    B = max(0.0, safe - standoff) / v0 if v0 > 0 else 0.0
     fld = cfg["field"]
     lane_len = float(fld["x_max"]) - float(fld["x_min"])
     pace = 1.0 / v0 if v0 > 0 else math.inf
     if M > 0:
         pace = max(pace, n_m * es / M)
-    n_c = n_m * W / W_s  # suspicions per metre inside the corridor (only these block the vehicle)
-    r_conf = (wq if (M > 0 and rho < 1.0 and math.isfinite(wq)) else 0.0) + es
-    q_conf = 1.0 - math.exp(-n_c * v_f * r_conf) if math.isfinite(n_c) else 1.0
-    q_exc = 1.0 - math.exp(-n_c * p_c * v_f * (r_conf + t_exc)) if (t_exc > 0 and math.isfinite(n_c)) else 0.0
-    R = max(q_conf * r_conf, q_exc * (r_conf + t_exc))
+    R = lag(es, wq, rho, p_c)
     t_lane = lane_len * pace + max(0.0, R - B)
     v_pred = lane_len / t_lane if t_lane > 0 else 0.0
     rho_reg = rho_mine
     out.update({
         "vehicle_speed_free_mps": v0, "suspicions_per_m": n_m, "buffer_s": B, "resolution_lag_s": R,
         "predicted_vehicle_speed_mps": v_pred,
-        "p_detect": p_detect, "p_detect_by_class": p_detect_cls,
+        "p_detect": p_detect, "p_detect_by_class": p_detect_cls, "on_reject": on_reject,
+        "investigation_time_s": t_exc,
         "residual_risk_per_km": rho_reg * W * 1000.0 * (1.0 - p_detect),
         "approximation": "Allen-Cunneen M/G/M; E[travel] by fixed-seed MC integration (see module docstring)",
     })
     return out
 
 
-def requirements_map(cfg, sensor_lib=None, mine_types=None, grid=None):
-    """Dense analytic requirements map over the SPEC 4.6 grid (generic screener)."""
+def requirements_map(cfg, sensor_lib=None, mine_types=None, grid=None, on_reject=("release", "investigate")):
+    """Dense analytic requirements map over the SPEC 4.6 grid (generic screener), per on_reject policy."""
     grid = grid or {
         "pd_low_metal": [0.1, 0.3, 0.5, 0.7, 0.9, 0.96],
         "pd_metal": [0.9, 0.98],
@@ -311,6 +379,14 @@ def requirements_map(cfg, sensor_lib=None, mine_types=None, grid=None):
     base["team"]["screening_sensor"] = "generic_screen"
     swath = float(base.get("generic_screen", {}).get("swath_m", 0.25))
     rows = []
+    for policy in on_reject:
+        base.setdefault("decision", {})["on_reject"] = policy
+        rows += _map_rows(base, lib, mt, grid, swath, policy)
+    return rows
+
+
+def _map_rows(base, lib, mt, grid, swath, policy):
+    rows = []
     for pdl in grid["pd_low_metal"]:
         for pdm in grid["pd_metal"]:
             for fa in grid["false_alarms_per_m2"]:
@@ -322,7 +398,7 @@ def requirements_map(cfg, sensor_lib=None, mine_types=None, grid=None):
                         mstar = first["M_star"]
                         for M in sorted({max(1, mstar - 1), mstar, mstar + 1}):
                             r = analyze(base, lib, mt, screen_overrides=ov, n_screeners=N, n_confirmers=M)
-                            rows.append({"pd_low_metal": pdl, "pd_metal": pdm, "false_alarms_per_m2": fa,
+                            rows.append({"on_reject": policy, "pd_low_metal": pdl, "pd_metal": pdm, "false_alarms_per_m2": fa,
                                          "area_rate": a, "N": N, "M": M, "M_star": mstar,
                                          "M_rel": M - mstar,
                                          "frontier_speed_mps": r["frontier_speed_mps"],

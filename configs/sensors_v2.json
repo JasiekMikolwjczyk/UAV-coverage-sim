@@ -103,12 +103,13 @@
       "k_depth": {"value": 1.0, "source": "assumption: slope; OK26 shows no UAV capability for non-metallic objects below 20 cm"},
       "max_depth_m": {"value": 0.20, "source": "OK26: no UAV capability for non-metallic objects below 20 cm"},
       "spatial_decay_m": {"value": 0.5, "source": "assumption: SPEC 4.3"},
-      "swath_m": {"value": 1.0, "source": "assumption: v1 magnetometer local-scan block reused"},
-      "scan_speed_mps": {"value": 1.0, "source": "assumption: v1 magnetometer local-scan block reused"},
-      "transit_speed_mps": {"value": 4.0, "source": "assumption: v1 magnetometer local-scan block reused"},
-      "line_length_m": {"value": 6.0, "source": "assumption: v1 magnetometer local-scan block reused"},
-      "local_scan_area_m": {"value": 8.0, "source": "assumption: v1 magnetometer local-scan block reused"},
-      "transverse_overlap": {"value": 0.5, "source": "assumption: v1 magnetometer local-scan block reused"},
+      "swath_m": {"value": 0.25, "source": "assumption: dense local GPR scan with a footprint of the order of the ETH22 0.25 m coil (SPEC 4.3)"},
+      "transverse_overlap": {"value": 0.0, "source": "assumption: adjacent local-scan lines abut at swath spacing (SPEC 4.3)"},
+      "scan_speed_mps": {"value": 0.5, "source": "assumption: slow dense scan, below the ETH22 0.6 m/s maximum real-world speed (SPEC 4.3)"},
+      "transit_speed_mps": {"value": 4.0, "source": "assumption: v1 transit speed reused (SPEC 4.3)"},
+      "min_scan_side_m": {"value": 1.0, "source": "assumption: minimum local-scan square that covers a mine body with margin when sigma is small (SPEC 4.3)"},
+      "line_length_m": {"value": 6.0, "source": "assumption: legacy_logistic only (v1 magnetometer local-scan block); not used in rate_based mode"},
+      "local_scan_area_m": {"value": 8.0, "source": "assumption: legacy_logistic only (v1 magnetometer local-scan block); not used in rate_based mode"},
       "presets": {
         "optimistic": {
           "p_confirm": {

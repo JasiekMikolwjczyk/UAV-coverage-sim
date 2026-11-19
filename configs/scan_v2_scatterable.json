@@ -28,7 +28,7 @@
     "sensor_preset": "nominal",
     "n_screeners": 2,
     "n_confirmers": 1,
-    "screening_mode": "corridor",
+    "screening_mode": "cross_track",
     "confirmer_policy": "priority",
     "confirmer_idle_spacing_m": 3.0,
     "segment_length_m": 10.0,
@@ -43,7 +43,10 @@
   "decision": {
     "confirmed_mine_threshold": 0.5,
     "prior_mine_probability": 0.5,
-    "excavation_time_s": 300.0
+    "on_reject": "release",
+    "investigation_time_s": 300.0,
+    "_investigation_time_source": "assumption: between MACA 108 s and GICHD06 1200 s",
+    "_on_reject_note": "release: a rejected suspicion is released; investigate: a rejected in-corridor suspicion blocks for investigation_time_s and is then resolved on the ground (SPEC 4.4)"
   },
   "tractor": {
     "width_m": 2.5,

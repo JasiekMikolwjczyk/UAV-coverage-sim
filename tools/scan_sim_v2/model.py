@@ -28,6 +28,10 @@ class UnusedConfigKeyWarning(UserWarning):
     pass
 
 
+class DeprecatedConfigKeyWarning(UnusedConfigKeyWarning):
+    """A renamed config key: still accepted and mapped, warned once."""
+
+
 # --------------------------------------------------------------------------- helpers
 
 def sv(node):
@@ -114,6 +118,8 @@ class SimObject:
     block_state: str = ""         # "", "unresolved", "excavation"
     t_assigned: float = math.nan
     t_done: float = math.nan
+    t_found: float = math.nan     # time the object became known as a mine (confirmation or investigation end)
+    investigated: bool = False    # rejected in-corridor suspicion investigated on the ground (on_reject=investigate)
     confirmer_id: int = -1
     travel_s: float = math.nan
     scan_s: float = math.nan
@@ -362,7 +368,7 @@ class ConfirmSensor:
             self.p_confirm[cls] = float(sv(node))
             self.calibration[f"p_confirm.{cls}"] = {"value": sv(node), "source": src(node)}
         for key in ("k_depth", "max_depth_m", "spatial_decay_m", "swath_m", "scan_speed_mps",
-                    "transit_speed_mps", "line_length_m", "local_scan_area_m", "transverse_overlap"):
+                    "transit_speed_mps", "min_scan_side_m", "transverse_overlap"):
             node = overrides.get(key, spec.get(key))
             self.calibration[key] = {"value": sv(node), "source": src(node) or "config override"}
         self.k_depth = float(sv(overrides.get("k_depth", spec["k_depth"])))
@@ -370,7 +376,7 @@ class ConfirmSensor:
         self.geom = {
             key: float(sv(overrides.get(key, spec[key])))
             for key in ("spatial_decay_m", "swath_m", "scan_speed_mps", "transit_speed_mps",
-                        "line_length_m", "local_scan_area_m", "transverse_overlap")
+                        "min_scan_side_m", "transverse_overlap")
         }
 
     def p_class_depth(self, cls: str, depth_m: float) -> float:
@@ -423,6 +429,12 @@ def warn_unused_keys(cfg: dict):
             warnings.warn(f"config key {key} is not used by scan_sim_v2 ({why})", UnusedConfigKeyWarning, stacklevel=3)
 
     dec = cfg.get("decision", {})
+    if "excavation_time_s" in dec:
+        key = "decision.excavation_time_s"
+        if key not in seen:
+            seen.add(key)
+            warnings.warn("config key decision.excavation_time_s is deprecated; use decision.investigation_time_s "
+                          "(value mapped)", DeprecatedConfigKeyWarning, stacklevel=3)
     if "sar_suspicious_max" in dec:
         warn("decision.sar_suspicious_max", "D3: never implemented in v1")
     if "cleared_threshold" in dec:
