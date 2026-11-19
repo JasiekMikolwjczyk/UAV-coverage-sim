@@ -173,10 +173,11 @@ def test_sensor_numbers_have_sources():
 # --------------------------------------------------------------------------- 4. false-alarm rate
 
 def _clutter_only_cfg(seed, density=0.6, generic=False):
-    cfg = small_cfg(x_max=40.0, n_screeners=2, n_confirmers=0, confirming_sensor=None)
+    # corridor mode: the screened area is exactly the corridor (cross-track end caps add pi r^2 per line)
+    cfg = small_cfg(x_max=40.0, n_screeners=2, n_confirmers=0, confirming_sensor=None, screening_mode="corridor")
     cfg["seed"] = seed
     cfg["population"]["density_per_m2"] = 0.0
-    cfg["decision"]["excavation_time_s"] = 0.0
+    cfg["decision"]["investigation_time_s"] = 0.0
     cfg["injection"]["enabled"] = False
     cfg["clutter"] = {"density_per_m2": density, "classes": {"metal_clutter": 0.8, "nonmetal_clutter": 0.2},
                       "depth_m": {"mean": 0.05, "std": 0.0, "min": 0.05, "max": 0.05}}
@@ -245,7 +246,8 @@ def test_energy_bookkeeping_and_time_split():
     assert abs(m["fleet_energy_Wh"] - (sum(m["screener_energy_Wh"]) + sum(m["confirmer_energy_Wh"]) + sum(m["surface_energy_Wh"]))) < 1e-9
     assert abs(m["fleet_energy_screening_Wh"] - 3 * m["screener_energy_Wh"][0]) < 1e-9
     split = sum(m[k] for k in ("tractor_moving_s", "tractor_wait_confirmation_s", "tractor_wait_frontier_s",
-                               "tractor_wait_excavation_s", "tractor_done_waiting_s"))
+                               "tractor_wait_investigation_confirmed_s", "tractor_wait_investigation_s",
+                               "tractor_done_waiting_s"))
     assert abs(split - m["elapsed_s"]) <= float(cfg["mission"]["dt"])
 
 
@@ -482,3 +484,172 @@ def test_projection_labelling(tmp_path):
     from scan_sim_v2.outputs import write_outputs
     write_outputs(res, str(tmp_path / "run"), plots=False)
     assert json.load(open(tmp_path / "run" / "metrics.json"))["projection"] is True
+
+
+# --------------------------------------------------------------------------- v2.1: 17. cross-track planner
+
+def _run_planner(pl, fld, swath, dt=1.0, check_cover=True, lane_y=5.0, W=4.5):
+    grid = geo.make_grid(fld)
+    gx0, _, gy0, _ = geo.coverage_bounds(fld)
+    res_g = fld["grid_res"]
+    t = 0.0
+    while not pl.done:
+        res = pl.step(dt)
+        t += dt
+        for segs in res.scan_segments:
+            for p0, p1 in segs:
+                geo.mark_capsule(grid, fld, p0, p1, 0.5 * swath)
+        if check_cover:
+            ix0 = int(math.ceil((min(pl.x_start, res.frontier_x) - gx0) / res_g))
+            ix1 = int(math.floor((max(pl.x_start, res.frontier_x) - gx0) / res_g))
+            iy0 = int(math.ceil((lane_y - W / 2 - gy0) / res_g))
+            iy1 = int(math.floor((lane_y + W / 2 - gy0) / res_g))
+            if ix1 > ix0:
+                assert grid[iy0:iy1, ix0:ix1].all()
+    return t
+
+
+@pytest.mark.parametrize("n,swath,turn,direction", [(2, 1.0, 3.0, 1), (3, 0.25, 3.0, -1), (4, 1.0, 0.0, 1), (5, 0.5, 2.0, 1)])
+def test_cross_track_coverage_and_frontier(n, swath, turn, direction):
+    fld = {"x_min": 0.0, "x_max": 60.0, "y_min": 0.0, "y_max": 10.0, "lane_width": 10.0, "grid_res": 0.25,
+           "terrain_margin_m": 3.0}
+    W, v = 4.5, 1.0
+    xs, xe = (0.0, 60.0) if direction == 1 else (60.0, 0.0)
+    pl = geo.make_planner("cross_track", 5.0, direction, xs, xe, n, swath, 0.0, v, W, 10.0, turn)
+    assert isinstance(pl, geo.CrossTrackPlanner)
+    t = _run_planner(pl, fld, swath)
+    v_formula, _ = geo.frontier_speed_formula(n, swath, 0.0, v, W, 10.0, turn, mode="cross_track")
+    assert v_formula == pytest.approx(n * swath / (W / v + turn))
+    nblk = math.ceil(60.0 / (n * swath))
+    t_formula = nblk * W / v + (nblk - 1) * turn
+    assert abs(t - t_formula) <= 1.0 + 1e-9
+
+
+def test_cross_track_doubling_n_doubles_speed():
+    fld = {"x_min": 0.0, "x_max": 200.0, "y_min": 0.0, "y_max": 10.0, "lane_width": 10.0, "grid_res": 0.5,
+           "terrain_margin_m": 3.0}
+    speeds = {}
+    for n in (2, 4, 8):
+        pl = geo.make_planner("cross_track", 5.0, 1, 0.0, 200.0, n, 1.0, 0.0, 1.0, 4.5, 10.0, 0.0)
+        speeds[n] = 200.0 / _run_planner(pl, fld, 1.0, check_cover=False)
+    assert speeds[4] / speeds[2] == pytest.approx(2.0, rel=0.02)
+    assert speeds[8] / speeds[4] == pytest.approx(2.0, rel=0.02)
+    # and in the simulator (frontier_speed_mps metric)
+    m = {}
+    for n in (2, 4):
+        cfg = _clutter_only_cfg(1, density=0.0)
+        cfg["field"]["x_max"] = 200.0
+        cfg["team"].update({"screening_mode": "cross_track", "n_screeners": n, "turn_time_s": 0.0})
+        m[n] = sim(cfg)["metrics"]["frontier_speed_mps"]
+    assert m[4] / m[2] == pytest.approx(2.0, rel=0.02)
+
+
+# --------------------------------------------------------------------------- v2.1: 18. rejection policy
+
+def _quick_case_cfg(N, M, seed, **decision):
+    cfg = copy.deepcopy(P1_CFG)
+    cfg["seed"] = seed
+    cfg["team"].update({"n_screeners": N, "n_confirmers": M, "screening_mode": "corridor",
+                        "screening_overrides": {"speed_mps": 0.25}})
+    cfg["decision"].update(decision)
+    return cfg
+
+
+def _digest(rows):
+    import hashlib
+    return hashlib.sha256(json.dumps(rows, sort_keys=True, default=repr).encode()).hexdigest()
+
+
+def test_release_bit_identical_to_v2_0():
+    ref = json.load(open(os.path.join(REPO, "tests", "data", "v2_0_release_reference.json")))
+    assert len(ref["cases"]) == 12
+    for case in ref["cases"]:
+        res = run_mission(_quick_case_cfg(case["N"], case["M"], case["seed"], on_reject="release"),
+                          LIB, MT, record_paths=False)
+        m = json.loads(json.dumps({k: v for k, v in res["metrics"].items() if k != "calibration"},
+                                  sort_keys=True, default=repr))
+        for k, v in case["metrics"].items():
+            assert m[k] == v, (case["N"], case["M"], case["seed"], k)
+        assert _digest(res["queue_log"]) == case["queue_log_sha256"]
+        objs = [(o.idx, o.outcome, o.found, o.confirm_result, repr(o.t_done)) for o in res["objects"]]
+        assert _digest(objs) == case["objects_sha256"]
+
+
+def test_release_is_default():
+    a = _quick_case_cfg(2, 2, 1)
+    a["decision"].pop("on_reject", None)
+    b = _quick_case_cfg(2, 2, 1, on_reject="release")
+    ma, mb = sim(a)["metrics"], sim(b)["metrics"]
+    assert json.dumps(ma, sort_keys=True, default=str) == json.dumps(mb, sort_keys=True, default=str)
+
+
+def test_investigate_policy():
+    cfg = _quick_case_cfg(4, 4, 2, on_reject="investigate")
+    cfg["population"].update({"density_per_m2": 0.01, "hard_target_selection": False})
+    res = sim(cfg)
+    m, objs = res["metrics"], res["objects"]
+    rej_in = [o for o in objs if o.verified and o.confirm_result == "rejected" and o.in_corridor]
+    rej_out = [o for o in objs if o.verified and o.confirm_result == "rejected" and not o.in_corridor]
+    assert rej_in and m["n_investigated_rejections"] == len(rej_in)
+    assert all(o.investigated for o in rej_in) and not any(o.investigated for o in rej_out)
+    for o in rej_in:
+        if o.is_mine:
+            assert o.found and o.outcome == "found_by_investigation"
+            assert o.t_found == pytest.approx(o.t_done + cfg["decision"]["investigation_time_s"])
+    assert m["tractor_wait_investigation_s"] > 0
+    assert m["tractor_wait_excavation_s"] == m["tractor_wait_investigation_confirmed_s"]
+    split = sum(m[k] for k in ("tractor_moving_s", "tractor_wait_confirmation_s", "tractor_wait_frontier_s",
+                               "tractor_wait_investigation_confirmed_s", "tractor_wait_investigation_s",
+                               "tractor_done_waiting_s"))
+    assert abs(split - m["elapsed_s"]) <= 1.0
+    a_rel = analyze(_quick_case_cfg(4, 4, 1, on_reject="release"), LIB, MT)
+    a_inv = analyze(_quick_case_cfg(4, 4, 1, on_reject="investigate"), LIB, MT)
+    assert a_inv["p_detect"] == pytest.approx(a_inv["pd_mine_mean"]) and a_inv["p_detect"] > a_rel["p_detect"]
+
+
+def test_excavation_time_key_deprecated():
+    cfg = _quick_case_cfg(2, 2, 1)
+    cfg["decision"].pop("investigation_time_s")
+    cfg["decision"]["excavation_time_s"] = 120.0
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        res = sim(cfg)
+    from scan_sim_v2.model import DeprecatedConfigKeyWarning
+    dep = [w for w in rec if issubclass(w.category, DeprecatedConfigKeyWarning)]
+    assert len(dep) == 1 and "excavation_time_s" in str(dep[0].message)
+    assert res["metrics"]["investigation_time_s"] == 120.0
+
+
+# --------------------------------------------------------------------------- v2.1: 19. local scan geometry
+
+@pytest.mark.parametrize("sigma,swath,overlap,min_side", [(0.0, 0.25, 0.0, 1.0), (0.15, 0.25, 0.0, 1.0),
+                                                          (0.3, 0.25, 0.0, 1.0), (0.6, 0.25, 0.2, 1.0),
+                                                          (0.15, 1.0, 0.5, 2.0)])
+def test_local_scan_side_and_path_length(sigma, swath, overlap, min_side):
+    geom = {"swath_m": swath, "transverse_overlap": overlap, "min_scan_side_m": min_side}
+    side = geo.local_scan_side(geom, sigma)
+    assert side == pytest.approx(max(min_side, 2 * 2.5 * sigma + swath))
+    assert geo.local_scan_side(geom, sigma, 0.5) == pytest.approx(0.5 * side)
+    segs = geo.local_square_segments(3.0, -2.0, geom, side)
+    spacing = swath * (1 - overlap)
+    n = math.ceil((side - swath) / spacing - 1e-9) + 1
+    assert len(segs) == n
+    assert geo.segment_path_length(segs, segs[0][0]) == pytest.approx(n * side + (side - swath))
+    # the swath covers the whole square
+    xs = np.linspace(3.0 - side / 2, 3.0 + side / 2, 41)
+    ys = np.linspace(-2.0 - side / 2, -2.0 + side / 2, 41)
+    X, Y = np.meshgrid(xs, ys)
+    d = np.min(np.stack([geo.seg_dist_array(X, Y, a, b) for a, b in segs]), axis=0)
+    assert (d <= swath / 2 + 1e-9).all()
+
+
+def test_local_scan_in_simulation():
+    cfg = _quick_case_cfg(2, 2, 1)
+    res = sim(cfg)
+    cs = build_confirm_sensor(LIB, "gpr_uav_confirm", "nominal")
+    sigma = build_screen_sensor(LIB, "mag_uav", "nominal").localization_std_m
+    side = geo.local_scan_side(cs.geom, sigma)
+    n = math.ceil((side - cs.geom["swath_m"]) / cs.geom["swath_m"] - 1e-9) + 1
+    scan_s = (n * side + side - cs.geom["swath_m"]) / cs.geom["scan_speed_mps"]
+    rows = [r for r in res["queue_log"] if not math.isnan(r["scan_s"])]
+    assert rows and all(r["scan_s"] == pytest.approx(scan_s) for r in rows)
