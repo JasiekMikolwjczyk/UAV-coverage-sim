@@ -1,0 +1,97 @@
+{
+  "_doc": "Scatterable stress scenario with imaging surface layer (SPEC 4.5.2, 4.5.3).",
+  "out_dir": "data/scan_v2_runs",
+  "seed": 1,
+  "detection_mode": "rate_based",
+  "field": {
+    "x_min": 0.0,
+    "x_max": 200.0,
+    "y_min": 0.0,
+    "y_max": 20.0,
+    "lane_width": 10.0,
+    "grid_res": 0.5,
+    "terrain_margin_m": 15.0
+  },
+  "mission": {
+    "dt": 1.0,
+    "max_time_s": 400000.0,
+    "start_hour": 12.0
+  },
+  "battery": {
+    "reserve_percent": 10.0,
+    "enforce": false,
+    "_note": "enforce=false: battery swaps assumed; platform capacities are assumption-only and energy is reported as a relative comparison (SPEC 6.3). Set enforce=true for SPEC 6.3 stop behaviour."
+  },
+  "team": {
+    "screening_sensor": "mag_uav",
+    "confirming_sensor": "gpr_uav_confirm",
+    "sensor_preset": "nominal",
+    "n_screeners": 2,
+    "n_confirmers": 1,
+    "screening_mode": "corridor",
+    "confirmer_policy": "priority",
+    "confirmer_idle_spacing_m": 3.0,
+    "segment_length_m": 10.0,
+    "turn_time_s": 3.0,
+    "scan_size": "full",
+    "surface_layer": {
+      "sensor": "thermal_uav",
+      "preset": "nominal",
+      "n": 1
+    }
+  },
+  "decision": {
+    "confirmed_mine_threshold": 0.5,
+    "prior_mine_probability": 0.5,
+    "excavation_time_s": 300.0
+  },
+  "tractor": {
+    "width_m": 2.5,
+    "safety_margin_m": 1.0,
+    "safe_distance_m": 20.0,
+    "max_speed_mps": 2.0,
+    "block_mode": "standoff",
+    "standoff_m": 5.0,
+    "pid": {
+      "kp": 0.25,
+      "ki": 0.015,
+      "kd": 0.0
+    }
+  },
+  "clutter": {
+    "density_per_m2": 0.6,
+    "classes": {
+      "metal_clutter": 0.8,
+      "nonmetal_clutter": 0.2
+    },
+    "depth_m": {
+      "mean": 0.05,
+      "std": 0.05,
+      "min": 0.0,
+      "max": 0.3
+    }
+  },
+  "population": {
+    "regime": "scatterable",
+    "scatterable_type": "PFM-1",
+    "scatterable": {
+      "density_per_m2": 0.002,
+      "n_footprints": 1,
+      "length_m": [
+        150.0,
+        300.0
+      ],
+      "width_m": [
+        35.0,
+        65.0
+      ]
+    }
+  },
+  "injection": {
+    "enabled": true,
+    "n_inject": 20
+  },
+  "localization_model": {
+    "kind": "static"
+  }
+}
