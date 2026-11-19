@@ -45,7 +45,10 @@ REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 BASE_CONFIG = os.path.join(REPO, "configs", "scan_v2_paper1.json")
 SPEC_KEYS = ["group", "screener", "preset", "confirmer_preset", "surface", "a", "N", "M", "regime",
              "density", "density_multiplier", "scatterable_type", "aged", "non_metal_fraction", "clutter",
-             "safe_distance", "max_speed", "policy", "gen_pd_metal", "gen_pd_low_metal", "gen_fa", "projection"]
+             "safe_distance", "max_speed", "policy", "gen_pd_metal", "gen_pd_low_metal", "gen_fa",
+             "screening_mode", "on_reject", "investigation_time", "projection"]
+# Groups that fix their own seeds regardless of --seeds (SPEC 10, v2.1).
+GROUP_SEEDS = {"planner_compare": list(range(1, 11))}
 SUMMARY_METRICS = ["mean_vehicle_speed_mps", "frontier_speed_mps", "fleet_energy_Wh", "energy_per_m2_cleared_Wh",
                    "false_confirmations", "confirmer_utilization", "n_suspicions", "elapsed_s",
                    "recall", "recall_metal", "recall_low_metal", "recall_non_metal",
@@ -71,7 +74,8 @@ def spec(group, **kw):
     s.update({"group": group, "screener": "mag_uav", "preset": "nominal", "confirmer_preset": "nominal",
               "surface": None, "a": 0.25, "N": 2, "M": 1, "regime": "residual", "density": 8.5e-7,
               "aged": False, "non_metal_fraction": 0.0, "clutter": 0.6, "safe_distance": 20.0,
-              "max_speed": 2.0, "policy": "priority", "projection": False})
+              "max_speed": 2.0, "policy": "priority", "on_reject": "release", "investigation_time": 300.0,
+              "projection": False})
     s.update(kw)
     return s
 
@@ -85,6 +89,13 @@ def build_cfg(s, base, lib):
     team["n_screeners"] = int(s["N"])
     team["n_confirmers"] = int(s["M"])
     team["confirmer_policy"] = s["policy"]
+    if s.get("screening_mode"):
+        team["screening_mode"] = s["screening_mode"]
+    dec = cfg.setdefault("decision", {})
+    dec.pop("excavation_time_s", None)
+    dec["on_reject"] = s.get("on_reject") or "release"
+    if s.get("investigation_time") is not None:
+        dec["investigation_time_s"] = float(s["investigation_time"])
     if int(s["M"]) == 0:
         team["confirming_sensor"] = None
     if s["surface"]:
@@ -120,6 +131,17 @@ def build_cfg(s, base, lib):
     return cfg
 
 
+MAP_GRID = {"pd_low_metal": [0.1, 0.3, 0.5, 0.7, 0.9, 0.96], "pd_metal": [0.9, 0.98],
+            "false_alarms_per_m2": [0.1, 0.3, 0.6, 1.0], "area_rate": [0.068, 0.15, 0.25, 0.5, 1.0],
+            "N": [1, 2, 4, 8, 16]}
+
+
+def map_job(job):
+    policy, pdl = job
+    grid = dict(MAP_GRID, pd_low_metal=[pdl])
+    return requirements_map(_BASE, _LIB, _MT, grid, on_reject=(policy,))
+
+
 def run_one(job):
     s, seed = job
     cfg = build_cfg(s, _BASE, _LIB)
@@ -135,7 +157,8 @@ def run_one(job):
             continue
         row[k] = v
     row["wall_s"] = time.time() - t0
-    qrows = [dict(r, seed=seed, **{k: s[k] for k in ("group", "screener", "preset", "confirmer_preset", "a", "N", "M")})
+    qrows = [dict(r, seed=seed, **{k: s[k] for k in ("group", "screener", "preset", "confirmer_preset", "a", "N", "M",
+                                                     "screening_mode", "on_reject", "investigation_time")})
              for r in res["queue_log"]]
     return row, qrows
 
@@ -151,15 +174,20 @@ def parse_seeds(text):
 
 def build_specs(groups, quick):
     if quick:
-        return [spec("primary", N=N, M=M) for N in (2, 4) for M in (1, 2)]
+        return [spec("primary", N=N, M=M, on_reject=r) for r in ("release", "investigate") for N in (2, 4) for M in (1, 2)]
     out = []
     A = [0.068, 0.25, 1.0]
     NS = [1, 2, 3, 4, 6, 8]
     MS = [1, 2, 3, 4]
     P = ["pessimistic", "nominal", "optimistic"]
+    R = ["release", "investigate"]
+    T = [108.0, 300.0, 1200.0]
     if "primary" in groups:
-        out += [spec("primary", preset=p, confirmer_preset=cp, a=a, N=N, M=M)
-                for p, cp, a, N, M in itertools.product(P, P, A, NS, MS)]
+        out += [spec("primary", preset=p, confirmer_preset=cp, a=a, N=N, M=M, on_reject=r, investigation_time=ti)
+                for p, cp, a, N, M, r, ti in itertools.product(P, P, A, NS, MS, R, T)]
+    if "planner_compare" in groups:
+        out += [spec("planner_compare", screening_mode=m, N=N)
+                for m, N in itertools.product(["corridor", "cross_track"], [2, 3, 4, 5])]
     if "projection" in groups:
         out += [spec("projection", screener="emi_uav", preset="ground_reference", confirmer_preset=cp, a=a, N=N, M=M,
                      projection=True) for cp, a, N, M in itertools.product(P, A, NS, MS)]
@@ -260,7 +288,9 @@ def analytic_vs_sim(summary, base, lib, mt):
             "inj_p_detect": (a["p_detect"], s.get("inj_p_detect_mean")),
         }
         row = {k: s[k] for k in ("group", "screener", "preset", "confirmer_preset", "a", "N", "M", "regime",
-                                 "clutter", "policy", "safe_distance", "max_speed")}
+                                 "clutter", "policy", "safe_distance", "max_speed", "screening_mode", "on_reject",
+                                 "investigation_time")}
+        row["screening_mode"] = cfg["team"]["screening_mode"]
         row["analytic_utilization_raw"] = a["utilization"]
         row["analytic_M_star"] = a["M_star"]
         flagged = []
@@ -285,17 +315,34 @@ def analytic_vs_sim(summary, base, lib, mt):
                             "service-throughput bound; finite 2x200 m mission includes start-up and lane-change transients)")
             elif s["M"]:
                 diag.append(f"analytic offered load per confirmer {a['utilization']:.3g} < 1 (vehicle speed uses the "
-                            "per-suspicion blocking-delay approximation, which ignores overlapping waits)")
+                            "per-lane resolution-lag approximation; E[S] uses the idle-position travel model)")
             if any(f[0] == "inj_p_detect" for f in flagged):
                 diag.append(f"injected mines per run = 20 x {s['n_seeds']} seeds; Wilson half-width at this n is "
                             "comparable to the difference")
             if any(f[0] == "arrival_rate_per_s" for f in flagged):
                 diag.append("sim arrival rate counts suspicions over primary screening time only; analytic lambda is "
                             "steady-state at the frontier speed")
-            notes.append(f"{s['group']} {s['screener']}/{s['preset']} gpr={s['confirmer_preset']} a={s['a']} N={s['N']} "
-                         f"M={s['M']} regime={s['regime']} clutter={s['clutter']}:\n  " + "\n  ".join(lines)
+            notes.append(f"{cell_label(s, cfg)}:\n  " + "\n  ".join(lines)
                          + "\n  diagnostics: " + "; ".join(diag or ["see component columns in analytic_vs_sim.csv"]))
     return rows, notes
+
+
+def cell_label(s, cfg):
+    return (f"{s['group']} {s['screener']}/{s['preset']} gpr={s['confirmer_preset']} a={s['a']} N={s['N']} "
+            f"M={s['M']} mode={cfg['team']['screening_mode']} on_reject={s.get('on_reject')} "
+            f"T_inv={s.get('investigation_time')} regime={s['regime']} clutter={s['clutter']}")
+
+
+def five_pct_check(avs):
+    """Lines for the frontier-speed / mean-service-time 5 % check (v2.1 definition of done)."""
+    out = []
+    for r in avs:
+        fr, es = r.get("frontier_speed_mps_rel_diff"), r.get("mean_service_time_s_rel_diff")
+        ok = all(v is None or abs(v) <= 0.05 for v in (fr, es))
+        fmt = lambda v: "n/a" if v is None else f"{100 * v:+.1f}%"
+        out.append(f"{'OK  ' if ok else 'FAIL'} {r['group']} {r['screener']}/{r['preset']} a={r['a']} N={r['N']} M={r['M']} "
+                   f"mode={r['screening_mode']} on_reject={r['on_reject']}: frontier {fmt(fr)}, E[S] {fmt(es)}")
+    return out
 
 
 def write_rows(path, rows, columns=None):
@@ -335,10 +382,11 @@ def make_plots(out_dir, rows, summary, avs, map_rows, points):
     pdir = os.path.join(out_dir, "plots")
     os.makedirs(pdir, exist_ok=True)
 
-    # 1. requirements map contours
-    if map_rows:
+    # 1. requirements map contours, one figure per on_reject policy
+    for policy in sorted({r.get("on_reject", "release") for r in map_rows}):
+        pr = [r for r in map_rows if r.get("on_reject", "release") == policy]
         fig, axes = plt.subplots(1, 2, figsize=(13, 5))
-        sub = [r for r in map_rows if r["pd_low_metal"] == 0.5 and r["pd_metal"] == 0.98
+        sub = [r for r in pr if r["pd_low_metal"] == 0.5 and r["pd_metal"] == 0.98
                and r["false_alarms_per_m2"] == 0.6 and r["M_rel"] == 0]
         Ns = sorted({r["N"] for r in sub})
         As = sorted({r["area_rate"] for r in sub})
@@ -349,12 +397,12 @@ def make_plots(out_dir, rows, summary, avs, map_rows, points):
         axes[0].set_xscale("log", base=2)
         axes[0].set_xlabel("screeners N")
         axes[0].set_ylabel("area rate per screener a [m²/s]")
-        axes[0].set_title("Vehicle speed (Pd_LM 0.5, Pd_M 0.98, FA 0.6/m², M = M*)")
+        axes[0].set_title(f"Vehicle speed (Pd_LM 0.5, Pd_M 0.98, FA 0.6/m², M = M*, {policy})")
         for p in points:
             if p.get("area_rate"):
                 axes[0].axhline(p["area_rate"], color="white", lw=0.6, ls=":")
                 axes[0].text(Ns[0], p["area_rate"], f" {p['sensor']}/{p['preset']}", color="white", fontsize=7, va="bottom")
-        sub2 = [r for r in map_rows if r["area_rate"] == 0.25 and r["N"] == 4 and r["pd_metal"] == 0.98 and r["M_rel"] == 0]
+        sub2 = [r for r in pr if r["area_rate"] == 0.25 and r["N"] == 4 and r["pd_metal"] == 0.98 and r["M_rel"] == 0]
         P = sorted({r["pd_low_metal"] for r in sub2})
         F = sorted({r["false_alarms_per_m2"] for r in sub2})
         Z2 = np.array([[next(r["residual_risk_per_km"] for r in sub2 if r["pd_low_metal"] == p and r["false_alarms_per_m2"] == f)
@@ -363,7 +411,7 @@ def make_plots(out_dir, rows, summary, avs, map_rows, points):
         fig.colorbar(cs2, ax=axes[1], label="residual risk [mines per km]")
         axes[1].set_xlabel("Pd_low_metal")
         axes[1].set_ylabel("false alarms per m²")
-        axes[1].set_title("Residual risk (a 0.25, N 4, Pd_M 0.98, M = M*)")
+        axes[1].set_title(f"Residual risk (a 0.25, N 4, Pd_M 0.98, M = M*, {policy})")
         for p in points:
             if p.get("pd_low_metal") is not None:
                 mk = "^" if p["projection"] else "o"
@@ -373,14 +421,16 @@ def make_plots(out_dir, rows, summary, avs, map_rows, points):
                                  textcoords="offset points")
         axes[1].set_xlim(0, 1)
         fig.tight_layout()
-        fig.savefig(os.path.join(pdir, "requirements_map.png"), dpi=140)
+        name = "requirements_map.png" if policy == "release" else f"requirements_map_{policy}.png"
+        fig.savefig(os.path.join(pdir, name), dpi=140)
         plt.close(fig)
 
     if not summary:
         return
     # 2. vehicle speed vs N, primary nominal residual clutter 0.6
     prim = [s for s in summary if s["group"] == "primary" and s["preset"] == "nominal"
-            and s["confirmer_preset"] == "nominal" and s["clutter"] == 0.6 and s["regime"] == "residual"]
+            and s["confirmer_preset"] == "nominal" and s["clutter"] == 0.6 and s["regime"] == "residual"
+            and s.get("on_reject", "release") == "release" and s.get("investigation_time") in (None, 300.0)]
     if prim:
         Ms = sorted({s["M"] for s in prim})
         fig, axes = plt.subplots(1, len(Ms), figsize=(5 * len(Ms), 4), squeeze=False)
@@ -396,7 +446,8 @@ def make_plots(out_dir, rows, summary, avs, map_rows, points):
                                    marker="o", label=f"sim a={a}")
                 an = [next((r["vehicle_speed_mps_analytic"] for r in avs if r["group"] == "primary" and r["preset"] == "nominal"
                             and r["confirmer_preset"] == "nominal" and r["a"] == a and r["N"] == n and r["M"] == M
-                            and r["clutter"] == 0.6), None) for n in Ns]
+                            and r["clutter"] == 0.6 and r.get("on_reject", "release") == "release"
+                            and r.get("investigation_time") in (None, 300.0)), None) for n in Ns]
                 ax.plot(Ns, an, ls="--", color=line[0].get_color(), label=f"analytic a={a}")
             ax.set_yscale("log")
             ax.set_xlabel("screeners N")
@@ -476,7 +527,8 @@ def main():
     ap = argparse.ArgumentParser(description="Scan simulator v2 sweep (SPEC 10).")
     ap.add_argument("--config", default=BASE_CONFIG)
     ap.add_argument("--out-dir", default="")
-    ap.add_argument("--groups", default="primary,projection,survey,imaging,regime,clutter,vehicle,policy,map_validation")
+    ap.add_argument("--groups", default="primary,planner_compare,projection,survey,imaging,regime,clutter,vehicle,policy,"
+                                        "map_validation")
     ap.add_argument("--seeds", default="1-30")
     ap.add_argument("--workers", type=int, default=os.cpu_count() or 1)
     ap.add_argument("--quick", action="store_true", help="primary, nominal, a=0.25, N in {2,4}, M in {1,2}, seeds 1-3")
@@ -495,7 +547,9 @@ def main():
 
     t0 = time.time()
     print("analytic requirements map ...", flush=True)
-    map_rows = [clean_json(r) for r in requirements_map(base, lib, mt)]
+    map_jobs = [(pol, pdl) for pol in ("release", "investigate") for pdl in MAP_GRID["pd_low_metal"]]
+    with Pool(min(args.workers, len(map_jobs)), initializer=_init, initargs=(args.config,)) as pool:
+        map_rows = [clean_json(r) for chunk in pool.map(map_job, map_jobs) for r in chunk]
     points = [clean_json(p) for p in measured_points(base, lib, mt)]
     write_rows(os.path.join(out_dir, "requirements_map.csv"), map_rows)
     write_rows(os.path.join(out_dir, "measured_points.csv"), points)
@@ -503,15 +557,13 @@ def main():
     groups = [g.strip() for g in args.groups.split(",") if g.strip()]
     seeds = [1, 2, 3] if args.quick else parse_seeds(args.seeds)
     specs = [] if args.map_only else build_specs(groups, args.quick)
-    jobs = [(s, seed) for s in specs for seed in seeds]
+    jobs = [(s, seed) for s in specs for seed in (GROUP_SEEDS.get(s["group"], seeds) if not args.quick else seeds)]
     manifest = {"created": time.strftime("%Y-%m-%d %H:%M:%S"), "git_commit": git_commit(), "git_dirty": git_dirty(),
                 "base_config": os.path.relpath(args.config, REPO), "base_config_content": base,
                 "mode": "quick" if args.quick else "map_only" if args.map_only else "full",
                 "groups": [] if args.quick or args.map_only else groups,
                 "seeds": seeds, "n_specs": len(specs), "n_runs": len(jobs), "specs": specs,
-                "map_grid": {"pd_low_metal": [0.1, 0.3, 0.5, 0.7, 0.9, 0.96], "pd_metal": [0.9, 0.98],
-                             "false_alarms_per_m2": [0.1, 0.3, 0.6, 1.0], "area_rate": [0.068, 0.15, 0.25, 0.5, 1.0],
-                             "N": [1, 2, 4, 8, 16], "M": "M* - 1, M*, M* + 1"}}
+                "map_grid": dict(MAP_GRID, M="M* - 1, M*, M* + 1", on_reject=["release", "investigate"])}
     with open(os.path.join(out_dir, "sweep_manifest.json"), "w", encoding="utf-8") as h:
         json.dump(clean_json(manifest), h, indent=2)
 
@@ -532,12 +584,15 @@ def main():
         write_rows(os.path.join(out_dir, "runs.csv"), rows)
         write_rows(os.path.join(out_dir, "summary.csv"), summary)
         write_rows(os.path.join(out_dir, "queue_log_all.csv"), qrows,
-                   ["group", "screener", "preset", "confirmer_preset", "a", "N", "M", "seed"] + QUEUE_LOG_COLUMNS)
+                   ["group", "screener", "preset", "confirmer_preset", "a", "N", "M", "screening_mode", "on_reject",
+                    "investigation_time", "seed"] + QUEUE_LOG_COLUMNS)
         write_rows(os.path.join(out_dir, "analytic_vs_sim.csv"), avs)
         with open(os.path.join(out_dir, "analytic_vs_sim_notes.txt"), "w", encoding="utf-8") as h:
             h.write("Cells where analytic and simulated values differ by more than 15%, with the model terms involved.\n"
                     "Approximations: see tools/scan_sim_v2/analytic.py docstring.\n\n")
             h.write("\n\n".join(notes) if notes else "No cell differs by more than 15%.\n")
+            h.write("\n\nFrontier speed and mean service time, analytic vs simulation (5 % check):\n")
+            h.write("\n".join(five_pct_check(avs)) + "\n")
     if not args.no_plots:
         make_plots(out_dir, rows, summary, avs, map_rows, points)
     print(f"done in {time.time() - t0:.0f} s -> {out_dir}")
