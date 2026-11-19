@@ -3,8 +3,9 @@
 Scan simulator v2 extends the v1 scan simulator (`tools/run_scan_simulation.py`, unchanged) with
 literature-calibrated rate-based sensors, a sourced mine population, clutter, N screeners + M
 confirmers, corridor screening, queue instrumentation, safety injection and an analytic model. The
-SPEC document ("SPEC: scan simulator v2 for Paper 1") is the source of truth. This file documents what is implemented,
-including every place where the implementation had to fill a gap in the SPEC (section 9).
+SPEC document ("SPEC: scan simulator v2 for Paper 1", now v2.1) is the source of truth. This file documents what is
+implemented, including every place where the implementation had to fill a gap in the SPEC (section 9).
+Section 11 lists what changed in v2.1.
 
 ## 1. How to run
 
@@ -19,6 +20,7 @@ python3 tools/run_scan_simulation_v2.py --config configs/scan_v2_sar_mag_v1equiv
 python3 tools/sweep_scan_v2.py --quick                                   # (1)
 python3 tools/sweep_scan_v2.py --map-only                                # (2)
 python3 tools/sweep_scan_v2.py --groups primary --no-plots               # (3) full grid, seeds 1-30
+python3 tools/sweep_scan_v2.py --groups planner_compare                  # corridor vs cross_track (seeds 1-10)
 python3 tools/sweep_scan_v2.py --groups projection,survey,imaging,regime,clutter,vehicle,policy   # (4)
 python3 tools/sweep_scan_v2.py --groups map_validation                   # (5)
 # (6) analytic vs simulation: analytic_vs_sim.csv + analytic_vs_sim_notes.txt in every sweep directory
@@ -30,9 +32,10 @@ python3 -m pytest tests/test_scan_sim_v2.py -q
 `--workers` sets the process-pool size (default: all cores) and `--seeds 1-30` (or `1,5,9`) sets the seeds.
 Sweep outputs go to `data/scan_v2_sweeps/<timestamp>/`, which is git-ignored.
 
-Cost: one Paper 1 mission takes 1–10 s (more when the confirmers are saturated, because more simulated
-time passes). `--quick` takes about 1 min on 12 cores, most of it spent on the analytic map. The full
-`primary` group is 1,944 configurations × 30 seeds.
+Cost: one Paper 1 mission takes about 1–10 s (more when the confirmers are saturated, because more
+simulated time passes). `--map-only` takes about 50 s on 12 cores and `--quick` (24 runs) a few minutes.
+The full `primary` group is 11,664 configurations (presets × GPR presets × a × N × M × `on_reject` ×
+investigation time) × 30 seeds, so plan it as a multi-day job or reduce `--seeds`.
 
 ## 2. Files
 
@@ -89,8 +92,9 @@ Legacy mode reads `battery.<sar|magnetometer>` exactly as v1 does.
 | `sensor_preset` | screener preset (`pessimistic`/`nominal`/`optimistic`; emi: `ground_reference`/`eth_flight`) |
 | `confirmer_preset` | GPR preset; defaults to `sensor_preset` if the GPR has it, else `nominal` |
 | `n_screeners`, `n_confirmers` | N, M |
-| `screening_mode` | `corridor` (Paper 1) or `lane_abreast` (v1 geometry) |
-| `segment_length_m`, `turn_time_s` | corridor segments (default 10 m, 3 s) |
+| `screening_mode` | `cross_track` (Paper 1 default since v2.1), `corridor`, or `lane_abreast` (v1 geometry) |
+| `segment_length_m` | `corridor` mode segment length (default 10 m) |
+| `turn_time_s` | turn between passes/lines (default 3 s) |
 | `confirmer_policy` | `priority`, `nearest`, `corridor_first`, or a dotted path `pkg.mod.func` / `pkg.mod:func` |
 | `confirmer_idle_spacing_m` | lateral spacing of idle confirmers (M > 1) |
 | `scan_size` | `small`/`medium`/`full` = local scan × 0.5/0.75/1.0 (Paper 1: `full`) |
@@ -105,7 +109,13 @@ Clutter objects are not generated for this sensor.
 
 ### `decision`
 `confirmed_mine_threshold` (legacy only), `prior_mine_probability` (D2; default 0.5),
-`excavation_time_s` (how long a confirmed object in the corridor keeps blocking; default 300 s in rate_based, 0 in legacy).
+`investigation_time_s` (how long an object in the corridor keeps blocking after it was confirmed, or after it was
+rejected under `investigate`; default 300 s in rate_based, 0 in legacy; assumption between [MACA] 108 s and
+[GICHD06] 1200 s). `on_reject` (SPEC 4.4): `release` (default; a rejected suspicion is released, and a rejected mine
+is a confirmation miss) or `investigate` (a rejected suspicion inside the corridor keeps blocking for
+`investigation_time_s` and is then resolved on the ground: a mine becomes `found_by_investigation`; outside the
+corridor it is released). The v2.0 key `excavation_time_s` is still accepted, mapped to `investigation_time_s` and
+warned once (`DeprecatedConfigKeyWarning`).
 `sar_suspicious_min` (legacy only). `sar_suspicious_max` and `cleared_threshold` are unused and warn once (D3).
 
 ### `tractor`
@@ -145,7 +155,26 @@ target = frontier − safe_distance), `max_speed_mps`, `pid.{kp,ki,kd}` (as v1, 
 Bernoulli(Pd) the first time an object lies within swath/2 of the screener's swept track. A
 detection creates a suspicion at the true position + N(0, σ) per axis, clipped to the field.
 Confirmation is Bernoulli(P(confirm | class, depth) · exp(−½(d/0.5)²)), with d the distance from the
-true position to the nearest local-scan line. The numbers and their sources are in
+true position to the nearest local-scan line.
+
+**Local GPR scan (SPEC 4.3, v2.1).** In rate_based mode the confirmer scans a square of side
+L = max(`min_scan_side_m`, 2·2.5·σ + `swath_m`) centred on the estimated position (σ = localisation std,
+1.0 m with the defaults). Lines run along y at spacing `swath_m`·(1 − `transverse_overlap`), from
+−L/2 + swath/2 to +L/2 − swath/2, so the swath covers the square exactly. The number of lines is
+n = ceil((L − swath)/spacing) + 1 and the path length is n·L + (L − swath): 4.75 m, i.e. 9.5 s at 0.5 m/s, with
+the defaults. `scan_size` factors scale L. `local_scan_area_m` and `line_length_m` (the v1 8 × 6 m lawnmower)
+are used only in legacy_logistic mode.
+
+**Screening planners (SPEC 6.1).**
+* `lane_abreast`: v1 geometry, a formation abreast across the lane flying along it.
+* `corridor`: k = ceil(W/C) lateral passes per segment of `segment_length_m`. For even k the formation
+  flies an empty return leg, so going from N = 2 (k = 3) to N = 4 (k = 2) does not speed up screening.
+* `cross_track` (Paper 1 default): lines run across the corridor (y from lane_y − W/2 to lane_y + W/2 and
+  back), with the N screeners side by side along x at sep = swath·(1 − overlap). After each line plus turn
+  the block advances N·sep. Frontier speed v_f = N·sep/(W/v + t_turn), proportional to N. The frontier
+  is the x up to which the ground is screened (leading boundary of the last completed block). The
+  half-disc end caps of each line screen π·r² (r = swath/2) beyond the corridor. The suspicions found
+  there are queued and load the confirmers. The numbers and their sources are in
 `configs/sensors_v2.json` (they reproduce SPEC 4.3) and in section 7.
 
 ## 5. Metrics (`metrics.json`)
@@ -167,22 +196,29 @@ These are `null` when there are no such mines, which is the normal case for `res
 **Injection:** `inj_n`, `inj_p_detect` with `_lo`/`_hi` (Wilson 95 %), and per class `inj_n_<c>`,
 `inj_detected_<c>`, `inj_p_detect_<c>[_lo|_hi]`, `inj_unscreened_<c>` (never passed under a screener, e.g. the mission stopped),
 `inj_screen_miss_<c>` (passed under, not detected), `inj_confirm_miss_<c>` (detected, not confirmed),
-`inj_late_<c>` (confirmed after the vehicle reached it), plus `inj_elapsed_s`, `inj_mean_vehicle_speed_mps`,
+`inj_late_<c>` (found after the vehicle reached it), `inj_found_by_investigation_<c>`, plus `inj_elapsed_s`, `inj_mean_vehicle_speed_mps`,
 `inj_fleet_energy_Wh`, `inj_n_suspicions`, `inj_stop_reason` from the injection pass.
 `residual_risk_per_km` = ρ · W · 1000 · (1 − `inj_p_detect`). "Detected before vehicle arrival" means
-confirmed as a mine with `t_done` ≤ the time the vehicle first reached the mine's x in its lane.
+found as a mine (confirmed, or at the end of its investigation) at a time `t_found` ≤ the time the vehicle
+first reached the mine's x in its lane.
 
 **Population:** `population_regime`, `population_density_per_m2`, `n_mines_natural`, `mines_per_type`,
 `mines_per_class`, `mean_depth_per_class`, `n_clutter`.
 
 **Workload:** `n_suspicions` (natural objects), `n_false_alarms` (clutter suspicions),
-`false_confirmations`, `precision` = TP/(TP + false confirmations), `false_alarms_per_m2` (per scanned m²).
+`false_confirmations`, `precision` = TP/(TP + false confirmations), `false_alarms_per_m2` (per scanned m²),
+`n_investigated_rejections` (rejected in-corridor suspicions investigated under `investigate`),
+`n_found_by_investigation` (natural mines found that way), `on_reject`, `investigation_time_s`.
 
 **Throughput:** `vehicle_distance_m`, `vehicle_time_s` (time until the last lane ends, i.e. without the
 final drain), `mean_vehicle_speed_mps` = distance / vehicle time, `frontier_speed_mps` (primary-layer
 cleared length / its active time), `coverage_efficiency` η = v_f · W / (N · swath · speed), and the time
-split `tractor_moving_s`, `tractor_wait_confirmation_s`, `tractor_wait_frontier_s`, `tractor_wait_excavation_s`,
+split `tractor_moving_s`, `tractor_wait_confirmation_s`, `tractor_wait_frontier_s`,
+`tractor_wait_investigation_confirmed_s` (blocked by a confirmed object under investigation),
+`tractor_wait_investigation_s` (blocked by a rejected object under investigation, `investigate` only) and
 `tractor_done_waiting_s` (includes the final drain), which sums to `elapsed_s` within dt.
+`tractor_wait_excavation_s` is a deprecated alias of `tractor_wait_investigation_confirmed_s` (kept for
+one release, not part of the sum).
 
 **Energy:** `screener_energy_Wh`, `surface_energy_Wh`, `confirmer_energy_Wh` (per drone),
 `fleet_energy_screening_Wh`, `fleet_energy_confirming_Wh`, `fleet_energy_Wh`,
@@ -198,7 +234,7 @@ split `tractor_moving_s`, `tractor_wait_confirmation_s`, `tractor_wait_frontier_
 t_assigned, t_done, confirmer_id, travel_s, scan_s, in_corridor, confirmed, posterior`), `mines.csv` /
 `mines.json` (v1 columns + `is_mine, class, mine_type, injected, screen_detected, confirm_result, outcome,
 t_vehicle_reach`; all objects, clutter included), `injected_mines.csv`, `coverage.npy`, `config.json`, `scan_result.png`.
-`outcome` ∈ {`true_positive`, `screening_miss`, `confirmation_miss`, `unresolved`, `false_confirmation`,
+`outcome` ∈ {`true_positive`, `found_by_investigation`, `screening_miss`, `confirmation_miss`, `unresolved`, `false_confirmation`,
 `rejected`, `undetected_clutter`}. `posterior` is reporting only: prior ρ_mine / (ρ_mine + ρ_clutter_detected),
 updated with P(confirm | mine) (class mix of the population) and P(confirm | clutter).
 
@@ -276,6 +312,11 @@ Clearance is seldom 100 % (90 % in an easy test field [GICHD05]). Flails throw m
 (rows, spacings, outlays); US example density 0.005 per m². POM-2: 464 mines over 4,100–4,200 × 35–65 m
 (~0.002 per m²) [POM2]. PFM-1 is surface-laid and scatterable [PFM1]. Types in use in Ukraine: [HRW23].
 Test depths: AP 5 cm, AT 10 cm [ITEP04]; seeded field 0–20 cm [OK26].
+### 7.6 Investigation time (v2.1)
+Time to resolve one alarm on the ground: [MACA] 108 s and [GICHD06] 1200 s per investigated alarm. The default
+`investigation_time_s` = 300 s lies between the two (assumption); the sweep uses {108, 300, 1200}. Full
+citations for both keys are in SPEC v2.1 section 3.
+
 Full source keys and URLs: SPEC section 3; short forms in `configs/sensors_v2.json` and `configs/mine_types_v2.json`.
 
 ## 8. Known v1 defects and how v2 handles them (D1–D10)
@@ -306,7 +347,8 @@ These are modelling choices. Each one is `assumption`-grade and can be changed i
 3. **Corridor planner with even k.** k passes over a segment end where the segment started. The formation
    then flies one extra transit leg of `segment_length` (payload off) to the next segment. For odd k the
    frontier speed is exactly L/(k(L/v + t_turn)) as in the SPEC. For even k it is
-   L/(k(L/v + t_turn) + L/v). `geometry.frontier_speed_formula` and the tests use this.
+   L/(k(L/v + t_turn) + L/v). `geometry.frontier_speed_formula` and the tests use this. This empty leg is why
+   v2.1 adds the `cross_track` planner.
 4. **Vehicle blocking (`tractor.block_mode`).** v1 stops the vehicle if any unresolved suspicion lies
    anywhere in the corridor between the vehicle and the screeners. Paper 1 configs use `standoff`: the
    vehicle may advance until it is `standoff_m` (5 m, assumption) before the nearest unresolved or
@@ -320,7 +362,7 @@ These are modelling choices. Each one is `assumption`-grade and can be changed i
    saturated Paper 1 missions. The Paper 1 configs set `battery.enforce: false`, i.e. battery swaps are
    assumed and energy is reported as a relative comparison. `enforce: true` restores the SPEC 6.3 stop.
 7. **Survey mode (M = 0).** Every detection is final: it is recorded as confirmed at detection time and,
-   if it is in the corridor, it blocks for `excavation_time_s`.
+   if it is in the corridor, it blocks for `investigation_time_s`.
 8. **Drain.** v1 drains only in-flight confirmations at the end. Rate_based mode also serves the
    suspicions still queued (all of them outside the corridor) so that every suspicion has an outcome.
    This time is counted in `tractor_done_waiting_s`, not in `vehicle_time_s`.
@@ -332,8 +374,8 @@ These are modelling choices. Each one is `assumption`-grade and can be changed i
     `clutter_a` (metal clutter like ETH22 metal targets; non-metal clutter as OK26 handheld EMI 2.3 %),
     both marked assumption.
 11. **`gpr_uav_survey`.** The SPEC gives Pd values; the config stores their logits (logit 0.12, 0.18, 0.227).
-12. **GPR local scan geometry** (swath, speeds, 8 m × 6 m lawnmower, 0.5 overlap) reuses the v1
-    magnetometer block (assumption). The local-scan side is max(`local_scan_area_m`, 2·2.5·σ) (SPEC 7.3).
+12. **GPR local scan geometry.** v2.0 reused the v1 8 m × 6 m lawnmower (about 110 s per alarm). v2.1 ties
+    the scan to the localisation error (section 4); the numbers are SPEC 4.3 assumptions.
 13. **Residual mix.** The TM-62 series takes 0.5 of the mix (split 0.6/0.4 between TM-62M and TM-62P3) and
     the three buried AP types share the remaining 0.5 equally (assumption; HRW23 only says TM-62 is the
     most frequent). Hard-target selection keeps the configured density ρ as the density of kept mines:
@@ -358,25 +400,57 @@ These are modelling choices. Each one is `assumption`-grade and can be changed i
     M × regimes × clutter × vehicle × policies × 30 seeds) is far too large. The sweep runs the full
     primary grid (presets × GPR presets × a × N × M) and varies the other factors one at a time around it
     (`regime`, `clutter`, `vehicle`, `policy` groups at N = 4, M = 2, nominal). Edit `build_specs` for other
-    designs. `sweep_manifest.json` records the exact specs.
+    designs. `sweep_manifest.json` records the exact specs. `planner_compare` runs corridor vs cross_track at
+    N ∈ {2, 3, 4, 5}, nominal presets, a = 0.25, M = 1 (the spec default; the SPEC does not fix M) and always seeds 1–10.
+21. **Cross-track frontier.** The SPEC says "rear edge of the last completed block". The implementation
+    uses the boundary up to which all ground is screened (block start + N·sep). It differs from the rear
+    edge by one block (≤ N·sep), not in speed.
+22. **Investigation under `investigate`** applies to rejected suspicions whose *estimated* position is in
+    the corridor (the vehicle only knows estimates). A mine whose estimate falls outside the corridor is
+    released and can still be a confirmation miss.
 
 ## 10. Analytic model (SPEC 9)
 
 `tools/scan_sim_v2/analytic.py` gives frontier speed (exact for the planner), η, N_req, λ (Pd averaged
 over the depth and class distribution of kept mines and over the clutter depth distribution), E[S]
-(fixed-seed Monte Carlo integration of the travel distance between consecutive scans for a busy FIFO
-confirmer, mixed with the idle-start case by utilisation), ρ, M*, Allen–Cunneen W_q and the predicted
-vehicle speed. The speed model is per lane:
+(fixed-seed Monte Carlo integration of the travel distance: from the previous scan end with the Erlang C
+probability that work is waiting, else from the SPEC 6.2 idle point, which trails the frontier by the
+vehicle's lag), ρ, M*, Allen–Cunneen W_q and the predicted vehicle speed. Arrivals use the screened
+width (cross-track adds the line end caps, a single wide pass adds its overhang). With `investigate`,
+P(detect) is the screening Pd and every in-corridor suspicion blocks for the investigation time. The
+speed model is per lane:
 
 T_lane = max(L/v0, L·n_m·E[S]/M) + max(0, R − B)
 
-where R is the resolution lag (confirmation, plus excavation if a confirmed object is likely in the lag
+where R is the resolution lag (confirmation, plus investigation if a blocking object is likely in the lag
 window) and B = (safe_distance − standoff)/v0. All approximations are listed in the module docstring.
-In a 15-cell check over clutter 0–0.6 per m², N 2–8 and M 1–60 (3 seeds each), the predicted vehicle
-speed was within 7 % of the simulation in every cell. Small-seed runs (`--quick`) still flag injected
-P(detect) because 60 injected mines give a Wilson interval of about ±0.09. With 1,200 injected mines the
-simulation gives 0.189 against the analytic 0.186.
 
-The requirements map (`requirements_map.csv`) is analytic over the SPEC 4.6 grid with M ∈ {M* − 1, M*, M* + 1}.
+v2.1 check (3 seeds per cell, a = 0.25, both planners, both `on_reject` values, N 2–5, M 1–8): frontier
+speed within 2 %, λ within 1 %, E[S] within 5 % for M ≤ 2 (every `--quick` cell within 2 %), vehicle speed
+within 13 %. Known weak spot: with 6–8 confirmers E[S] is underestimated by 10–12 % (idle-position model).
+`analytic_vs_sim_notes.txt` ends with a per-cell 5 % check of frontier speed and E[S]. Small-seed runs still
+flag injected P(detect) because 60 injected mines give a Wilson interval of about ±0.09.
+
+The requirements map (`requirements_map.csv`) is analytic over the SPEC 4.6 grid with M ∈ {M* − 1, M*, M* + 1},
+for both `on_reject` values (column `on_reject`; plots `requirements_map.png` and `requirements_map_investigate.png`).
 `measured_points.csv` places the measured sensors on the same axes: Pd per class averaged over the
 residual population, detections per m² from clutter, and area rate.
+
+## 11. Changes in v2.1
+
+| Change | Where |
+|---|---|
+| Local GPR scan tied to σ: square of side max(1 m, 5σ + 0.25 m), 0.25 m swath at 0.5 m/s (~9.5 s per alarm instead of ~110 s) | `sensors_v2.json`, `geometry.local_scan_side` / `local_square_segments`, `simulate.execute_task`, `analytic._scan_template` |
+| `decision.on_reject` ∈ {`release`, `investigate`} | `simulate.complete`, outcomes, metrics, analytic |
+| `excavation_time_s` → `investigation_time_s` (old key mapped, warned) | configs, `simulate.investigation_time`, analytic |
+| `cross_track` planner (Paper 1 default) | `geometry.CrossTrackPlanner`, `make_planner`, `frontier_speed_formula` |
+| Analytic: screened width with end caps, Erlang C / idle-point travel model, parallel map | `analytic.py`, `sweep_scan_v2.py` |
+| Sweep: `on_reject` × investigation time {108, 300, 1200} in `primary`; `planner_compare`; map per `on_reject`; 5 % check in notes | `sweep_scan_v2.py` |
+| Tests 17–19 (+ default/deprecation/investigate checks) | `tests/test_scan_sim_v2.py` |
+
+Test 18 compares `on_reject: release` against `tests/data/v2_0_release_reference.json`. That fixture was
+recorded from the code *after* the v2.1 scan-geometry change and *before* the rejection-policy change, with
+the quick config pinned to `corridor` mode (N ∈ {2, 4}, M ∈ {1, 2}, seeds 1–3, a = 0.25). The scan geometry
+change alters every rate_based result, so the fixture checks that adding `on_reject`, the rename and the
+cross-track planner left the `release` behaviour bit-identical. It does not compare against the v2.0
+commit itself.
