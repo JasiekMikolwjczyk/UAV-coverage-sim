@@ -1,0 +1,149 @@
+{
+  "out_dir": "data/scan_v2_runs",
+  "seed": 1,
+  "field": {
+    "x_min": 0.0,
+    "x_max": 200.0,
+    "y_min": 0.0,
+    "y_max": 20.0,
+    "lane_width": 10.0,
+    "grid_res": 0.5,
+    "terrain_margin_m": 15.0
+  },
+  "mission": {
+    "dt": 1.0,
+    "max_time_s": 24000.0
+  },
+  "battery": {
+    "reserve_percent": 10.0,
+    "sar": {
+      "capacity_Wh": 180.0,
+      "base_power_W": 80.0,
+      "speed_quad_coeff": 6.0,
+      "payload_power_W": 35.0
+    },
+    "magnetometer": {
+      "capacity_Wh": 120.0,
+      "base_power_W": 55.0,
+      "speed_quad_coeff": 7.0,
+      "payload_power_W": 12.0
+    }
+  },
+  "sar": {
+    "technology": "RADAR SAR FMCW polarimetric",
+    "altitude_m": 20.0,
+    "look_angle_deg": 35.0,
+    "footprint_m": 12.0,
+    "swath_m": 12.0,
+    "transverse_overlap": 0.5,
+    "speed_mps": 3.0,
+    "localization_std_m": 1.5,
+    "detection_model": {
+      "bias": -0.55,
+      "material": {
+        "metal": 1.05,
+        "plastic": 0.25
+      },
+      "shape": {
+        "sphere": 0.0,
+        "ellipsoid": 0.1,
+        "cylinder": 0.05
+      },
+      "size_coeff": 4.0,
+      "depth_coeff": 4.5
+    }
+  },
+  "magnetometer": {
+    "technology": "UAV magnetometer",
+    "uav_altitude_m": 2.0,
+    "sensor_height_m": 1.0,
+    "swath_m": 1.0,
+    "scan_speed_mps": 1.0,
+    "transit_speed_mps": 4.0,
+    "line_length_m": 6.0,
+    "local_scan_area_m": 8.0,
+    "transverse_overlap": 0.5,
+    "spatial_decay_m": 0.75,
+    "detection_model": {
+      "bias": -0.65,
+      "material": {
+        "metal": 2.0,
+        "plastic": -1.0
+      },
+      "shape": {
+        "sphere": 0.0,
+        "ellipsoid": 0.05,
+        "cylinder": 0.1
+      },
+      "size_coeff": 4.5,
+      "depth_coeff": 6.0
+    }
+  },
+  "decision": {
+    "sar_suspicious_min": 0.2,
+    "sar_suspicious_max": 0.75,
+    "confirmed_mine_threshold": 0.5,
+    "cleared_threshold": 0.25,
+    "prior_mine_probability": 0.5
+  },
+  "tractor": {
+    "width_m": 2.5,
+    "safety_margin_m": 1.0,
+    "safe_distance_m": 20.0,
+    "max_speed_mps": 2.0,
+    "pid": {
+      "kp": 0.25,
+      "ki": 0.015,
+      "kd": 0.0
+    }
+  },
+  "mine_distribution": {
+    "mode": "gaussian_x_uniform_y",
+    "count": 4,
+    "mean": [
+      100.0,
+      30.0
+    ],
+    "std": [
+      35.0,
+      12.0
+    ]
+  },
+  "mine_properties": {
+    "materials": {
+      "metal": 0.95,
+      "plastic": 0.05
+    },
+    "shapes": {
+      "sphere": 0.3,
+      "ellipsoid": 0.4,
+      "cylinder": 0.3
+    },
+    "depth_m": {
+      "mean": 0.25,
+      "std": 0.12,
+      "min": 0.02,
+      "max": 0.8
+    },
+    "size_m": {
+      "mean": 0.25,
+      "std": 0.08,
+      "min": 0.08,
+      "max": 0.5
+    }
+  },
+  "detection_mode": "legacy_logistic",
+  "team": {
+    "screening_sensor": "sar",
+    "confirming_sensor": "magnetometer",
+    "sensor_preset": "nominal",
+    "n_screeners": 2,
+    "n_confirmers": 1,
+    "screening_mode": "lane_abreast",
+    "confirmer_policy": "priority",
+    "confirmer_idle_spacing_m": 3.0
+  },
+  "clutter": {
+    "density_per_m2": 0.0
+  }
+}

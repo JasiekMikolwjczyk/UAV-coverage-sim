@@ -1,0 +1,234 @@
+{
+  "_doc": "Sensor library for scan simulator v2 (SPEC section 4). Every number is {value, source}: source is a section-3 key or 'assumption: <reason>'. logit Pd = a[class] - k_depth * (depth_m - 0.05) / 0.10; beyond max_depth_m Pd = 0.",
+  "sources": {
+    "OK26": "Baur et al., Remote Sensing 18(13):2182, 2026",
+    "RS24": "Remote Sensing 16(16):2916, 2024 (UAV vector magnetometer)",
+    "DMZ21": "Sensors 2021, drone magnetometer in the DMZ",
+    "ETH22": "arXiv 2212.07132, 5-DOF metal detector drone",
+    "ITEP04": "ITEP/US Army HSTAMIDS vs VMH-1, Thailand 2004",
+    "DAN": "Daniels, review of GPR for landmine detection",
+    "GPRREV": "Review of landmine detection using GPR",
+    "DANUXO": "Daniels, dual-sensor results in live minefields",
+    "BRU": "Bruschini et al., DeTeC",
+    "KV02": "Khanafer, Vafai, IEEE TGRS 40(2), 2002",
+    "IRAT": "SPIE 4394, IR signatures of surface and buried AT landmines"
+  },
+  "sensors": {
+    "mag_uav": {
+      "role": "screen",
+      "model": "logit_depth",
+      "label": "UAV magnetometer",
+      "projection": false,
+      "altitude_m": {"value": 0.5, "source": "RS24 (below 1 m); OK26 (0.2-2 m)"},
+      "swath_m": {"value": 1.0, "source": "assumption: no section-3 source gives UAV magnetometer swath; area rate is swept"},
+      "speed_mps": {"value": 1.0, "source": "assumption: no section-3 source gives UAV magnetometer survey speed; area rate is swept"},
+      "transverse_overlap": {"value": 0.0, "source": "assumption: abreast screeners tile the corridor without overlap"},
+      "localization_std_m": {"value": 0.15, "source": "assumption: ITEP04 15 cm acceptance criterion as reference"},
+      "clutter_class_map": {"metal_clutter": "metal", "nonmetal_clutter": "non_metal"},
+      "clutter_class_map_source": "assumption: all metal clutter treated as ferrous (worst case for false alarms); nonmetal clutter uses a[non_metal]",
+      "presets": {
+        "optimistic": {
+          "a": {
+            "metal": {"value": 4.595, "source": "RS24: 100% on M15/M16/POMZ below 1 m, capped at Pd 0.99 (assumption: finite trials)"},
+            "low_metal": {"value": -2.231, "source": "OK26: handheld ferrous detector on plastic items 9.7% as ground-level best case"},
+            "non_metal": {"value": -2.498, "source": "OK26: UAV magnetometer plastic 7.6%"}
+          },
+          "k_depth": {"value": 0.239, "source": "OK26 Table 8: UAV magnetometry 32.3% shallow -> 25% deep metallic"},
+          "max_depth_m": {"value": 0.30, "source": "assumption: SPEC 4.3 table value; OK26 burial range 0-20 cm plus margin"}
+        },
+        "nominal": {
+          "a": {
+            "metal": {"value": 2.111, "source": "logit midpoint of RS24 (optimistic) and OK26 (pessimistic)"},
+            "low_metal": {"value": -2.364, "source": "logit midpoint of OK26 9.7% and OK26 7.6%"},
+            "non_metal": {"value": -2.498, "source": "OK26: UAV magnetometer plastic 7.6%"}
+          },
+          "k_depth": {"value": 0.239, "source": "OK26 Table 8: UAV magnetometry 32.3% shallow -> 25% deep metallic"},
+          "max_depth_m": {"value": 0.30, "source": "assumption: SPEC 4.3 table value; OK26 burial range 0-20 cm plus margin"}
+        },
+        "pessimistic": {
+          "a": {
+            "metal": {"value": -0.372, "source": "OK26: UAV magnetometer ferrous 40.8%"},
+            "low_metal": {"value": -2.498, "source": "OK26: UAV magnetometer plastic 7.6%; PFM-1 never detected by aerial magnetometry"},
+            "non_metal": {"value": -2.498, "source": "OK26: UAV magnetometer plastic 7.6%"}
+          },
+          "k_depth": {"value": 0.239, "source": "OK26 Table 8: UAV magnetometry 32.3% shallow -> 25% deep metallic"},
+          "max_depth_m": {"value": 0.30, "source": "assumption: SPEC 4.3 table value; OK26 burial range 0-20 cm plus margin"}
+        }
+      }
+    },
+    "emi_uav": {
+      "role": "screen",
+      "model": "logit_depth",
+      "label": "UAV EMI (projection)",
+      "projection": true,
+      "altitude_m": {"value": 0.18, "source": "ETH22: sensor-to-surface 0.18 m"},
+      "swath_m": {"value": 0.25, "source": "ETH22: coil major axis 0.25 m"},
+      "speed_mps": {"value": 1.0, "source": "ETH22: 1 m/s stated limit for reliable detector operation; area rate is swept"},
+      "transverse_overlap": {"value": 0.0, "source": "assumption: abreast screeners tile the corridor without overlap"},
+      "localization_std_m": {"value": 0.15, "source": "assumption: ITEP04 15 cm acceptance criterion as reference"},
+      "clutter_class_map": {"metal_clutter": "metal", "nonmetal_clutter": "non_metal"},
+      "clutter_class_map_source": "assumption: metal clutter seen like metal mines; nonmetal clutter like non-metal objects",
+      "presets": {
+        "ground_reference": {
+          "a": {
+            "metal": {"value": 3.892, "source": "ITEP04: metal detector AP-M Pd 0.98 (handheld, ground level)"},
+            "low_metal": {"value": 3.178, "source": "ITEP04: metal detector AP-LM Pd 0.96 (handheld, ground level)"},
+            "non_metal": {"value": -3.749, "source": "OK26: handheld EMI plastic 2.3%"}
+          },
+          "k_depth": {"value": 2.154, "source": "OK26 Table 8: handheld EMI 96.2% shallow -> 50% deep metallic"},
+          "max_depth_m": {"value": null, "source": "assumption: no depth cut-off stated; depth slope governs"}
+        },
+        "eth_flight": {
+          "a": {
+            "metal": {"value": 2.825, "source": "ETH22: 17/18 flush 0.1 m metal targets (Pd 0.944)"},
+            "low_metal": {"value": null, "source": "ETH22: unknown -> not simulated"},
+            "non_metal": {"value": null, "source": "ETH22: unknown -> not simulated"}
+          },
+          "k_depth": {"value": 2.154, "source": "assumption: ground-reference EMI slope (OK26) reused"},
+          "max_depth_m": {"value": null, "source": "assumption: no depth cut-off stated; depth slope governs"},
+          "swath_m": {"value": 0.25, "source": "ETH22: coil major axis 0.25 m"},
+          "speed_mps": {"value": 0.272, "source": "ETH22: 0.068 m2/s mean area rate / 0.25 m swath"},
+          "clutter_a": {
+            "metal_clutter": {"value": 2.825, "source": "assumption: metal clutter seen like ETH22 metal targets"},
+            "nonmetal_clutter": {"value": -3.749, "source": "assumption: OK26 handheld EMI plastic 2.3% reused (ETH22 gives none)"}
+          }
+        }
+      }
+    },
+    "gpr_uav_confirm": {
+      "role": "confirm",
+      "model": "confirm_table",
+      "label": "UAV GPR confirmer",
+      "projection": false,
+      "k_depth": {"value": 1.0, "source": "assumption: slope; OK26 shows no UAV capability for non-metallic objects below 20 cm"},
+      "max_depth_m": {"value": 0.20, "source": "OK26: no UAV capability for non-metallic objects below 20 cm"},
+      "spatial_decay_m": {"value": 0.5, "source": "assumption: SPEC 4.3"},
+      "swath_m": {"value": 1.0, "source": "assumption: v1 magnetometer local-scan block reused"},
+      "scan_speed_mps": {"value": 1.0, "source": "assumption: v1 magnetometer local-scan block reused"},
+      "transit_speed_mps": {"value": 4.0, "source": "assumption: v1 magnetometer local-scan block reused"},
+      "line_length_m": {"value": 6.0, "source": "assumption: v1 magnetometer local-scan block reused"},
+      "local_scan_area_m": {"value": 8.0, "source": "assumption: v1 magnetometer local-scan block reused"},
+      "transverse_overlap": {"value": 0.5, "source": "assumption: v1 magnetometer local-scan block reused"},
+      "presets": {
+        "optimistic": {
+          "p_confirm": {
+            "metal": {"value": 0.95, "source": "ITEP04: HSTAMIDS correct classification AP-M"},
+            "low_metal": {"value": 0.93, "source": "ITEP04: HSTAMIDS correct classification AP-LM / AT-LM"},
+            "non_metal": {"value": 0.93, "source": "ITEP04: HSTAMIDS correct classification (LM rows reused)"},
+            "clutter": {"value": 0.227, "source": "ITEP04: 0.201 / 0.884 false alarms after/before GPR classification"}
+          }
+        },
+        "nominal": {
+          "p_confirm": {
+            "metal": {"value": 0.65, "source": "OK26: cart GPR, mean of ferrous 50.0% and non-ferrous 80.6%"},
+            "low_metal": {"value": 0.556, "source": "OK26: cart GPR plastic 55.6%"},
+            "non_metal": {"value": 0.556, "source": "OK26: cart GPR plastic 55.6%"},
+            "clutter": {"value": 0.227, "source": "ITEP04 ratio 0.201/0.884 (assumption: only available ratio)"}
+          }
+        },
+        "pessimistic": {
+          "p_confirm": {
+            "metal": {"value": 0.12, "source": "OK26: UAV GPR survey mode (ferrous 12.1%, non-ferrous 11.8%)"},
+            "low_metal": {"value": 0.18, "source": "OK26: UAV GPR survey mode plastic 18.2%"},
+            "non_metal": {"value": 0.18, "source": "OK26: UAV GPR survey mode plastic 18.2%"},
+            "clutter": {"value": 0.227, "source": "assumption: ITEP04 ratio reused"}
+          }
+        }
+      }
+    },
+    "gpr_uav_survey": {
+      "role": "screen",
+      "model": "logit_depth",
+      "label": "UAV GPR full-coverage survey",
+      "projection": false,
+      "altitude_m": {"value": 0.5, "source": "OK26: Radarteam Cobra at 0.5 m"},
+      "swath_m": {"value": 1.0, "source": "assumption: no section-3 source gives UAV GPR swath"},
+      "speed_mps": {"value": 1.0, "source": "assumption: no section-3 source gives UAV GPR survey speed"},
+      "transverse_overlap": {"value": 0.0, "source": "assumption: abreast screeners tile the corridor without overlap"},
+      "localization_std_m": {"value": 0.15, "source": "assumption: ITEP04 15 cm acceptance criterion as reference"},
+      "clutter_class_map": {"metal_clutter": "clutter", "nonmetal_clutter": "clutter"},
+      "clutter_class_map_source": "assumption: a = logit(0.227) for both clutter classes",
+      "presets": {
+        "nominal": {
+          "a": {
+            "metal": {"value": -1.992, "source": "OK26: UAV GPR survey ferrous 12.1% / non-ferrous 11.8% (logit 0.12)"},
+            "low_metal": {"value": -1.516, "source": "OK26: UAV GPR survey plastic 18.2% (logit 0.18)"},
+            "non_metal": {"value": -1.516, "source": "OK26: UAV GPR survey plastic 18.2% (logit 0.18)"},
+            "clutter": {"value": -1.224, "source": "assumption: logit(0.227), ITEP04 ratio"}
+          },
+          "k_depth": {"value": 1.0, "source": "assumption: GPR confirmer slope reused"},
+          "max_depth_m": {"value": 0.20, "source": "OK26: no UAV capability for non-metallic objects below 20 cm"}
+        }
+      }
+    },
+    "rgb_uav": {
+      "role": "surface",
+      "model": "imaging",
+      "label": "UAV RGB imaging",
+      "projection": false,
+      "altitude_m": {"value": 15.0, "source": "assumption: SPEC 4.3 imaging layer"},
+      "swath_m": {"value": 10.0, "source": "assumption: SPEC 4.3 imaging layer"},
+      "speed_mps": {"value": 3.0, "source": "assumption: SPEC 4.3 imaging layer"},
+      "transverse_overlap": {"value": 0.0, "source": "assumption: single imaging drone"},
+      "localization_std_m": {"value": 0.3, "source": "assumption: imaging georeferencing error, no section-3 figure"},
+      "surface_depth_max_m": {"value": 0.01, "source": "assumption: SPEC 4.3 surface threshold"},
+      "presets": {
+        "nominal": {
+          "pd_surface": {"value": 0.948, "source": "OK26 Table 4: RGB 94.8%"},
+          "pd_buried": {"value": 0.0, "source": "OK26: RGB sees no buried objects"}
+        }
+      },
+      "clutter_rule_source": "assumption: surface clutter as visible as surface mines (worst case for false alarms)"
+    },
+    "thermal_uav": {
+      "role": "surface",
+      "model": "imaging",
+      "label": "UAV thermal imaging",
+      "projection": false,
+      "altitude_m": {"value": 15.0, "source": "assumption: SPEC 4.3 imaging layer"},
+      "swath_m": {"value": 10.0, "source": "assumption: SPEC 4.3 imaging layer"},
+      "speed_mps": {"value": 3.0, "source": "assumption: SPEC 4.3 imaging layer"},
+      "transverse_overlap": {"value": 0.0, "source": "assumption: single imaging drone"},
+      "localization_std_m": {"value": 0.3, "source": "assumption: imaging georeferencing error, no section-3 figure"},
+      "surface_depth_max_m": {"value": 0.01, "source": "assumption: SPEC 4.3 surface threshold"},
+      "crossover_hours": {"value": [[6.5, 8.0], [17.0, 18.5]], "source": "assumption: after IRAT/KV02 (crossover after sunrise and sunset)"},
+      "presets": {
+        "nominal": {
+          "pd_surface": {"value": 0.837, "source": "OK26 Table 4: thermal 83.7%"},
+          "pd_buried": {"value": 0.01, "source": "OK26: UAV thermal 0-1.4% on buried items"}
+        }
+      },
+      "clutter_rule_source": "assumption: surface clutter as visible as surface mines (worst case for false alarms)"
+    },
+    "generic_screen": {
+      "role": "screen",
+      "model": "generic",
+      "label": "Generic screener (requirements map)",
+      "projection": false,
+      "presets": {
+        "nominal": {
+          "pd": {
+            "metal": {"value": 0.98, "source": "assumption: SPEC 4.6 default map point"},
+            "low_metal": {"value": 0.5, "source": "assumption: SPEC 4.6 default map point"},
+            "non_metal": {"value": 0.0, "source": "assumption: SPEC 4.6 default map point"}
+          },
+          "false_alarms_per_m2": {"value": 0.6, "source": "ITEP04: indigenous clutter FAR 0.598 per m2"},
+          "swath_m": {"value": 0.25, "source": "ETH22: coil major axis 0.25 m"},
+          "speed_mps": {"value": 1.0, "source": "ETH22: 1 m/s stated limit"},
+          "localization_std_m": {"value": 0.15, "source": "assumption: ITEP04 15 cm acceptance criterion as reference"}
+        }
+      },
+      "transverse_overlap": {"value": 0.0, "source": "assumption: abreast screeners tile the corridor without overlap"}
+    }
+  },
+  "platforms": {
+    "_source": "assumption: all platform values (v1 magnetometer block reused for mag_uav); energy reported only as relative comparison",
+    "emi_uav": {"capacity_Wh": 150.0, "base_power_W": 70.0, "speed_quad_coeff": 7.0, "payload_power_W": 8.0},
+    "mag_uav": {"capacity_Wh": 120.0, "base_power_W": 55.0, "speed_quad_coeff": 7.0, "payload_power_W": 12.0},
+    "gpr_uav_confirm": {"capacity_Wh": 150.0, "base_power_W": 65.0, "speed_quad_coeff": 7.0, "payload_power_W": 25.0},
+    "gpr_uav_survey": {"capacity_Wh": 150.0, "base_power_W": 65.0, "speed_quad_coeff": 7.0, "payload_power_W": 25.0},
+    "rgb_uav": {"capacity_Wh": 150.0, "base_power_W": 70.0, "speed_quad_coeff": 6.0, "payload_power_W": 5.0},
+    "thermal_uav": {"capacity_Wh": 150.0, "base_power_W": 70.0, "speed_quad_coeff": 6.0, "payload_power_W": 10.0},
+    "generic_screen": {"capacity_Wh": 150.0, "base_power_W": 70.0, "speed_quad_coeff": 7.0, "payload_power_W": 8.0}
+  }
+}
