@@ -1,0 +1,92 @@
+{
+  "_doc": "Mine-type table for scan simulator v2 (SPEC 4.5.1). Classes describe EMI detectability: metal = metal body or large metal parts; low_metal = plastic body with metal limited to the fuze; non_metal = no EMI-detectable metal (sensitivity analysis only).",
+  "sources": {
+    "GICHDUA": "GICHD, Explosive Ordnance Guide for Ukraine, 2nd ed., 2022",
+    "NLM": "Andy Smith, nolandmines.com mine pages",
+    "OZMW": "OZM mine, Wikipedia",
+    "TM62W": "TM-62, Wikipedia",
+    "BRU": "Bruschini et al., DeTeC",
+    "OK26": "Baur et al., Remote Sensing 18(13):2182, 2026",
+    "ITEP04": "ITEP/US Army HSTAMIDS vs VMH-1, Thailand 2004",
+    "FM3342": "US Army FM 3-34.2, Appendix B",
+    "POM2": "POM-2 mine, Wikipedia",
+    "HRW23": "Human Rights Watch, Landmine Use in Ukraine, 2023"
+  },
+  "types": {
+    "PMN-2": {
+      "role": "AP", "class": "low_metal", "emplacement": "buried", "depth_model": "ap_buried",
+      "class_source": "GICHDUA: injection-moulded plastic body; BRU: metal content of some grams; NLM: generally easy to detect with a good metal detector",
+      "emplacement_source": "ITEP04 test depth; FM3342 notes PMN surface-laid by mine layers (surface in doctrinal regime)",
+      "doctrinal_emplacement": "surface"
+    },
+    "PMN-4": {
+      "role": "AP", "class": "metal", "emplacement": "buried", "depth_model": "ap_buried",
+      "class_source": "GICHDUA: plastic casing over an alloy pressure plate; not a minimum metal mine and relatively easy to detect",
+      "emplacement_source": "assumption: blast AP mine, buried as PMN-2"
+    },
+    "OZM-72": {
+      "role": "AP", "class": "metal", "emplacement": "buried", "depth_model": "ap_buried",
+      "class_source": "GICHDUA: sheet-steel outer body with pre-formed chopped steel rod fragments; OZMW: iron casing, 5 kg",
+      "emplacement_source": "GICHDUA: casing will very likely remain buried in the ground"
+    },
+    "PFM-1": {
+      "role": "AP", "class": "low_metal", "emplacement": "surface", "depth_model": "surface",
+      "class_source": "OK26: minimal metal, 50-100 g; GICHDUA: fuze largely aluminium, ferrous springs and locking balls",
+      "emplacement_source": "GICHDUA: scatterable, usually found on the surface"
+    },
+    "POM-2": {
+      "role": "AP", "class": "metal", "emplacement": "surface", "depth_model": "surface",
+      "class_source": "GICHDUA: cast-steel cylinder; POM2",
+      "emplacement_source": "GICHDUA, POM2: scatterable, remotely delivered"
+    },
+    "TM-62M": {
+      "role": "AT", "class": "metal", "emplacement": "buried", "depth_model": "at_buried",
+      "class_source": "GICHDUA: metal-bodied AV blast mine; TM62W: most widely employed TM-62 variant",
+      "emplacement_source": "ITEP04 AT test depth; assumption: buried in residual fields"
+    },
+    "TM-62P3": {
+      "role": "AT", "class": "low_metal", "emplacement": "buried", "depth_model": "at_buried",
+      "class_source": "GICHDUA: plastic-bodied; with MVP fuze can be deemed a minimum metal mine; MVP-62M striker, springs and detonator detectable with modern EMI",
+      "emplacement_source": "ITEP04 AT test depth"
+    }
+  },
+  "depth_models": {
+    "surface": {"kind": "fixed", "depth": {"value": 0.0, "source": "PFM1, FM3342: surface-laid"}},
+    "ap_buried": {
+      "kind": "uniform",
+      "low": {"value": 0.0, "source": "OK26: 0-20 cm seeded range"},
+      "high": {"value": 0.10, "source": "assumption: width around ITEP04 nominal AP 5 cm, within OK26 0-20 cm"}
+    },
+    "at_buried": {
+      "kind": "uniform",
+      "low": {"value": 0.05, "source": "assumption: width around ITEP04 nominal AT 10 cm"},
+      "high": {"value": 0.20, "source": "OK26: 0-20 cm seeded range"}
+    }
+  },
+  "mixes": {
+    "residual_mix": {
+      "_source": "HRW23: hand-emplaced TM-62 series most frequently deployed AV type; TM62W: TM-62M most widely employed variant; TM-62M/TM-62P3 0.6/0.4 ratio and AP equal weights are assumption; surface scatterables excluded (assumption: visible, removed by visual clearance)",
+      "weights": {
+        "TM-62M": {"value": 0.30, "source": "assumption: TM-62 series 0.5 of mix (HRW23 most frequent) x 0.6 (TM62W)"},
+        "TM-62P3": {"value": 0.20, "source": "assumption: TM-62 series 0.5 of mix x 0.4"},
+        "PMN-2": {"value": 0.1667, "source": "assumption: AP buried types equal weights"},
+        "PMN-4": {"value": 0.1667, "source": "assumption: AP buried types equal weights"},
+        "OZM-72": {"value": 0.1666, "source": "assumption: AP buried types equal weights"}
+      }
+    },
+    "doctrinal_at": {
+      "weights": {
+        "TM-62M": {"value": 0.6, "source": "assumption: ratio; HRW23/TM62W TM-62M most widely employed"},
+        "TM-62P3": {"value": 0.4, "source": "assumption: ratio"}
+      }
+    },
+    "doctrinal_ap": {
+      "weights": {
+        "PMN-2": {"value": 0.5, "source": "assumption: equal weights"},
+        "PMN-4": {"value": 0.5, "source": "assumption: equal weights"}
+      }
+    },
+    "scatterable_pfm1": {"weights": {"PFM-1": {"value": 1.0, "source": "PFM1"}}},
+    "scatterable_pom2": {"weights": {"POM-2": {"value": 1.0, "source": "POM2"}}}
+  }
+}
